@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 (2026-10-20)
+
+- **A BIF is named for what it holds**: `copy` and `build` name each `<video>-<width>-<seconds>.bif`, `-640-10.bif` for most, where they named it `-320-10.bif` whatever was inside. `--name emby` names them as before.
+- **`rename` gives the BIFs already there the names for what they hold**: a `-320-10.bif` holding pictures 640 wide becomes `-640-10.bif`. Only the name changes, and each renaming is recorded. `scan` counts the BIFs it would rename.
+
 ## 0.1.0 (2026-10-20)
 
 The first release: BIFs for Emby, cut from Jellyfin's thumbnails or built from the video.

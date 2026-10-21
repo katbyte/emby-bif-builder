@@ -45,6 +45,7 @@ ebb copy                      # a BIF for every video Jellyfin has thumbnails of
 ebb copy --upgrade            # and replace Emby's 320-wide ones with Jellyfin's 640-wide thumbnails
 ebb build --keyframes         # a BIF from the video itself, for videos Jellyfin has not got to
 ebb lookup <video, BIF or Jellyfin item ID>   # what one video has, and what copy would do for it
+ebb rename                    # name each BIF for what it holds: -320-10.bif holding 640-wide pictures becomes -640-10.bif
 ebb clean                     # remove the BIFs left behind when their video was renamed or removed
 ```
 
@@ -58,6 +59,7 @@ ebb clean                     # remove the BIFs left behind when their video was
 | [`copy`](docs/commands.md#copy) | cuts a BIF from Jellyfin's thumbnail sheets for each video that has none; with `--upgrade`, also replaces BIFs narrower than Jellyfin's thumbnails, and removes the old ones |
 | [`build`](docs/commands.md#build) | builds a BIF from the video with ffmpeg, for videos Jellyfin has no thumbnails of |
 | [`lookup`](docs/commands.md#lookup) | says what a video, a BIF beside one, a Jellyfin item ID or a trickplay folder is, and what each server has for it |
+| [`rename`](docs/commands.md#rename) | names each BIF for what it holds, `<video>-<width>-<seconds>.bif`, so a `-320-10.bif` holding pictures 640 wide becomes `-640-10.bif` |
 | [`clean`](docs/commands.md#clean) | removes the strays scan lists: BIFs whose video is no longer beside them, and half-written ones |
 
 Films and episodes get BIFs. Trailers, theme videos and the other extras only do with `--extras`.
@@ -74,7 +76,7 @@ All can be a flag, an environment variable, or a line in a settings file.
 | `EMBY_BIF_BUILDER_MEDIA_PATHS` | `--media-paths` | none | where the videos are found when that is not where the servers see them, as `/mnt/video=/Volumes/video` |
 | `EMBY_BIF_BUILDER_LIBRARIES` | `--libraries` | all | the only libraries to look at, by name: `TV,Movies` |
 | `EMBY_BIF_BUILDER_EXTRAS` | `--extras` | `false` | give trailers and the other extras BIFs too |
-| `EMBY_BIF_BUILDER_NAME` | `--name` | `emby` | [what the BIFs written are called](#what-the-bifs-are-called) |
+| `EMBY_BIF_BUILDER_NAME` | `--name` | `size` | [what the BIFs written are called](#what-the-bifs-are-called) |
 | `EMBY_BIF_BUILDER_RECORD` | `--record` | `~/.emby-bif-builder-changes.tsv` | the record of every BIF written, replaced or removed; empty for none |
 | `EMBY_BIF_BUILDER_WORKERS` | `--workers` | `8` | how many folders are read, and BIFs cut, at once |
 | `EMBY_BIF_BUILDER_BUILD_WORKERS` | `--build-workers` | `1` | how many videos are decoded at once |
@@ -105,8 +107,8 @@ The databases are opened read-only and as if they could not change, so no lock i
 
 Emby finds a BIF beside a video whichever of these it is called, and shows what is inside. `--name` chooses:
 
-- `emby`, the default: `<video>-320-10.bif`, the name Emby gives its own, whatever the width inside. Emby's own thumbnail task then counts the video as done and does not make a 320-wide one beside it.
-- `size`: `<video>-640-10.bif`, the width inside and the seconds apart.
+- `size`, the default: `<video>-640-10.bif`, how wide the pictures inside are and how many seconds apart. A video narrower than 640 has pictures as wide as itself, and its BIF says so: `-576-10.bif`. [`ebb rename`](docs/commands.md#rename) gives the BIFs already there these names.
+- `emby`: `<video>-320-10.bif`, the name Emby gave its own at 320, whatever the width inside.
 - `bare`: `<video>.bif`, as Roku players named them.
 
 ## How this is built

@@ -40,7 +40,7 @@ Library by library:
 | to copy | the videos with no BIF that Jellyfin has thumbnails of: what `copy` would make |
 | to upgrade | the videos whose BIF is narrower than Jellyfin's thumbnails, cannot be read, or holds less than half as many pictures: what `copy --upgrade` would replace |
 
-Then the BIFs: how wide their pictures are, how they are named, who made them (Emby, or `ebb` from Jellyfin or from the video), how many are broken, short or long and how many of those each run would replace, how many hold a single picture and how many of those are short for their video, how many cannot be opened from here, how many videos have more than one, and how many are strays. Then Jellyfin's thumbnails: how many videos have them, how wide, and how many are of videos Emby does not have.
+Then the BIFs: how wide their pictures are, how they are named and how many are named for other than what they hold, who made them (Emby, or `ebb` from Jellyfin or from the video), how many are broken, short or long and how many of those each run would replace, how many hold a single picture and how many of those are short for their video, how many cannot be opened from here, how many videos have more than one, and how many are strays. Then Jellyfin's thumbnails: how many videos have them, how wide, and how many are of videos Emby does not have.
 
 Extras are counted in their column and left out of the rest unless `--extras` is given.
 
@@ -95,6 +95,12 @@ Takes any number of things, each one of:
 - a folder or sheet in Jellyfin's trickplay folder, which is named by the item ID.
 
 For each it says what video it is and what that video has: where it is found, what Emby takes it for and which library holds it, each BIF beside it and what it holds, Jellyfin's item and thumbnails and how many of their sheets are there, and what `copy` and `copy --upgrade` would do for it.
+
+## rename
+
+Names each BIF for what it holds: `<video>-<width>-<seconds>.bif`, how wide its pictures are and how many seconds apart, read from the BIF itself. A `-320-10.bif` holding pictures 640 wide becomes `-640-10.bif`, and a bare `<video>.bif` gets its width and seconds. `copy` and `build` name the BIFs they write this way unless `--name` says otherwise, so `rename` is for the BIFs already there: those `ebb` wrote before, and any other whose name does not say what is inside.
+
+A BIF that cannot be read, or cannot be opened from here, is left as it is, as is one whose new name another BIF beside the video already has. Only the name changes, with nothing read or written but that, and each renaming goes in the record. `--dry-run` says what would be renamed and renames nothing; `--limit` stops after so many. `scan` counts the BIFs `rename` would rename.
 
 ## clean
 

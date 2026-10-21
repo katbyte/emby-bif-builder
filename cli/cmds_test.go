@@ -205,8 +205,8 @@ func TestADryRunChangesNothing(t *testing.T) {
 	}
 	// each says which of how many it is, what it would do and why, what its BIF would be cut from and where it would go
 	for _, want := range []string{
-		"[2/4] would make    Show - 01x01 - Fresh-320-10.bif: no BIF\n      in            " + filepath.Dir(l.Local(l.fresh)) + "\n      from          Jellyfin's 23 thumbnails on 1 sheet in " + l.freshThumbnails.Folder(l.Trickplay) + "\n",
-		"would upgrade Show - 01x02 - Narrow-320-10.bif: its BIF is 32 wide, Jellyfin's thumbnails 64\n",
+		"[2/4] would make    Show - 01x01 - Fresh-64-10.bif: no BIF\n      in            " + filepath.Dir(l.Local(l.fresh)) + "\n      from          Jellyfin's 23 thumbnails on 1 sheet in " + l.freshThumbnails.Folder(l.Trickplay) + "\n",
+		"would upgrade Show - 01x02 - Narrow-64-10.bif: its BIF is 32 wide, Jellyfin's thumbnails 64\n",
 		"would make 2, would upgrade 2, would remake 0",
 	} {
 		if !strings.Contains(out, want) {
@@ -227,7 +227,7 @@ func TestCopyCutsJellyfinsThumbnails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	made := l.bif(l.fresh, "Show - 01x01 - Fresh-320-10.bif")
+	made := l.bif(l.fresh, "Show - 01x01 - Fresh-64-10.bif")
 	info := servertest.Read(t, made)
 	if info.Frames != 23 || info.Width != 64 || info.Height != 36 || info.Interval != 10*time.Second || !strings.HasPrefix(info.Note, "jellyfin ") {
 		t.Errorf("the BIF made holds %+v, want 23 pictures 64x36 ten seconds apart with ebb's note", info)
@@ -238,13 +238,13 @@ func TestCopyCutsJellyfinsThumbnails(t *testing.T) {
 		}
 	}
 
-	if info := servertest.Read(t, l.bif(l.film, "Film (2000)-320-10.bif")); info.Width != 54 || info.Frames != 5 {
+	if info := servertest.Read(t, l.bif(l.film, "Film (2000)-54-10.bif")); info.Width != 54 || info.Frames != 5 {
 		t.Errorf("the film's BIF holds %+v, want Jellyfin's 5 pictures 54 wide", info)
 	}
 	if info := servertest.Read(t, l.bif(l.narrow, "Show - 01x02 - Narrow-320-10.bif")); info.Width != 32 {
 		t.Errorf("without --upgrade the narrow BIF was replaced: it is now %d wide", info.Width)
 	}
-	if _, err := os.Stat(l.bif(l.trailer, "Film (2000)-trailer-320-10.bif")); err == nil {
+	if _, err := os.Stat(l.bif(l.trailer, "Film (2000)-trailer-64-10.bif")); err == nil {
 		t.Error("the trailer was given a BIF without --extras")
 	}
 
@@ -253,8 +253,8 @@ func TestCopyCutsJellyfinsThumbnails(t *testing.T) {
 	}
 	// each is said as it starts, and again once it is made, with how many of how many are done, what it holds, its folder and what it was cut from
 	for _, want := range []string{
-		" making    Show - 01x01 - Fresh-320-10.bif: no BIF\n",
-		"] made      Show - 01x01 - Fresh-320-10.bif: 23 pictures, 64x36, ",
+		" making    Show - 01x01 - Fresh-64-10.bif: no BIF\n",
+		"] made      Show - 01x01 - Fresh-64-10.bif: 23 pictures, 64x36, ",
 		"      in        " + filepath.Dir(made) + "\n      from      Jellyfin's 23 thumbnails on 1 sheet in " + l.freshThumbnails.Folder(l.Trickplay) + "\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -312,22 +312,25 @@ func TestUpgradeReplacesNarrowerBIFs(t *testing.T) {
 	}
 
 	for _, v := range []string{l.narrow, l.twice} {
-		name := strings.TrimSuffix(filepath.Base(v), ".mkv") + "-320-10.bif"
+		name := strings.TrimSuffix(filepath.Base(v), ".mkv") + "-64-10.bif"
 		if info := servertest.Read(t, l.bif(v, name)); info.Width != 64 || !strings.HasPrefix(info.Note, "jellyfin ") {
 			t.Errorf("%s holds %+v, want Jellyfin's 64-wide thumbnails", name, info)
 		}
 	}
-	bare := l.bif(l.twice, "Show - 01x03 - Twice.bif")
-	if _, err := os.Stat(bare); err == nil {
-		t.Error("the old bare BIF beside the upgraded one is still there")
+	// the new BIFs are named for what they hold, and every old one beside them is removed
+	for _, old := range []string{l.bif(l.narrow, "Show - 01x02 - Narrow-320-10.bif"), l.bif(l.twice, "Show - 01x03 - Twice-320-10.bif"), l.bif(l.twice, "Show - 01x03 - Twice.bif")} {
+		if _, err := os.Stat(old); err == nil {
+			t.Errorf("the old BIF %s beside the upgraded one is still there", filepath.Base(old))
+		}
 	}
 	if info := servertest.Read(t, l.bif(l.wide, "Show - 01x05 - Wide-640-10.bif")); info.Note != "" {
 		t.Error("a BIF as wide as Jellyfin's was replaced")
 	}
 
-	if !strings.Contains(out, "made 2, upgraded 2, remade 0, failed 0") || !strings.Contains(out, "removed 1 old BIFs") {
+	if !strings.Contains(out, "made 2, upgraded 2, remade 0, failed 0") || !strings.Contains(out, "removed 3 old BIFs") {
 		t.Errorf("the totals are wrong:\n%s", out)
 	}
+	bare := l.bif(l.twice, "Show - 01x03 - Twice.bif")
 	if lines := recorded(t, record); !slices.ContainsFunc(lines, func(line string) bool { return strings.Contains(line, "\tremoved\t"+bare+"\t") }) {
 		t.Errorf("the record does not hold the bare BIF's removal: %q", lines)
 	}
@@ -354,7 +357,7 @@ func TestRemakeWhenJellyfinMadeItsThumbnailsAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "made 0, upgraded 0, remade 1, failed 0") || !strings.Contains(out, "] remade    Show - 01x01 - Fresh-320-10.bif: ") {
+	if !strings.Contains(out, "made 0, upgraded 0, remade 1, failed 0") || !strings.Contains(out, "] remade    Show - 01x01 - Fresh-64-10.bif: ") {
 		t.Errorf("the BIF was not cut again:\n%s", out)
 	}
 }
@@ -400,8 +403,8 @@ func TestExtrasGetBIFsWhenAskedFor(t *testing.T) {
 	if _, _, err := run(t, "copy", "--extras", "--libraries", "movies"); err != nil {
 		t.Fatal(err)
 	}
-	servertest.Read(t, l.bif(l.trailer, "Film (2000)-trailer-320-10.bif"))
-	if _, err := os.Stat(l.bif(l.fresh, "Show - 01x01 - Fresh-320-10.bif")); err == nil {
+	servertest.Read(t, l.bif(l.trailer, "Film (2000)-trailer-64-10.bif"))
+	if _, err := os.Stat(l.bif(l.fresh, "Show - 01x01 - Fresh-64-10.bif")); err == nil {
 		t.Error("--libraries movies gave the TV library BIFs too")
 	}
 
@@ -606,6 +609,47 @@ func TestScanListsVideosNotFound(t *testing.T) {
 	}
 	if strings.Contains(out, "not found "+l.Local(l.fresh)) {
 		t.Errorf("scan lists a video that is there as not found:\n%s", out)
+	}
+}
+
+// rename names each BIF for what it holds, says it first with --dry-run, leaves one whose new name another already has, and records each renaming.
+func TestRename(t *testing.T) {
+	alone(t)
+	l := newLibrary(t)
+	record := set(t, l.Servers)
+
+	out, _, err := run(t, "scan")
+	if err != nil || !strings.Contains(out, "  misnamed:  4 ") {
+		t.Errorf("scan does not count the 4 misnamed BIFs (%v):\n%s", err, out)
+	}
+
+	before := l.files(t)
+	out, _, err = run(t, "rename", "--dry-run")
+	if err != nil || !strings.Contains(out, "would rename Show - 01x05 - Wide-640-10.bif\n") || !strings.Contains(out, "would rename 3 BIFs") {
+		t.Errorf("rename --dry-run gave (%v):\n%s", err, out)
+	}
+	if after := l.files(t); !slices.Equal(before, after) {
+		t.Errorf("a dry run renamed: before %q, after %q", before, after)
+	}
+
+	out, _, err = run(t, "rename")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Show - 01x02 - Narrow-32-10.bif", "Show - 01x03 - Twice-32-10.bif", "Show - 01x05 - Wide-64-10.bif", "Show - 01x03 - Twice.bif"} {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(l.Local(l.narrow)), name)); err != nil {
+			t.Errorf("%s is not there: %v", name, err)
+		}
+	}
+	if !strings.Contains(out, "renamed 3 BIFs, failed 0") || !strings.Contains(out, "left 1 BIF whose new name another BIF beside the video already has") {
+		t.Errorf("the totals are wrong:\n%s", out)
+	}
+	if lines := recorded(t, record); len(lines) != 3 || !strings.Contains(lines[0], "\trenamed\t") {
+		t.Errorf("the record holds %q, want the three renamings", lines)
+	}
+
+	if out, _, err = run(t, "rename"); err != nil || !strings.Contains(out, "renamed 0 BIFs") {
+		t.Errorf("a second rename gave (%v):\n%s", err, out)
 	}
 }
 

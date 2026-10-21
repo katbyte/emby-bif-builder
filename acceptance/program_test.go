@@ -109,7 +109,7 @@ func TestCopyAndUpgrade(t *testing.T) {
 	if r.code != 0 || !strings.Contains(r.out, "would make 1, would upgrade 1, would remake 0") {
 		t.Fatalf("the dry run ended %d:\n%s%s", r.code, r.out, r.errs)
 	}
-	if _, err := os.Stat(strings.TrimSuffix(videos[0], ".mkv") + "-320-10.bif"); err == nil {
+	if _, err := os.Stat(strings.TrimSuffix(videos[0], ".mkv") + "-64-10.bif"); err == nil {
 		t.Error("the dry run made a BIF")
 	}
 
@@ -118,25 +118,27 @@ func TestCopyAndUpgrade(t *testing.T) {
 		t.Fatalf("copy ended %d:\n%s%s", r.code, r.out, r.errs)
 	}
 	r = run(t, dir, nil, "copy", "--upgrade")
-	if r.code != 0 || !strings.Contains(r.out, "made 0, upgraded 1, remade 0, failed 0") || !strings.Contains(r.out, "removed 1 old BIFs") {
+	if r.code != 0 || !strings.Contains(r.out, "made 0, upgraded 1, remade 0, failed 0") || !strings.Contains(r.out, "removed 2 old BIFs") {
 		t.Fatalf("copy --upgrade ended %d:\n%s%s", r.code, r.out, r.errs)
 	}
 
 	for _, v := range videos[:2] {
-		if info := servertest.Read(t, strings.TrimSuffix(v, ".mkv")+"-320-10.bif"); info.Width != 64 || info.Frames != 12 {
+		if info := servertest.Read(t, strings.TrimSuffix(v, ".mkv")+"-64-10.bif"); info.Width != 64 || info.Frames != 12 {
 			t.Errorf("%s's BIF holds %+v, want Jellyfin's 12 pictures 64 wide", v, info)
 		}
 	}
-	if _, err := os.Stat(strings.TrimSuffix(videos[1], ".mkv") + ".bif"); err == nil {
-		t.Error("the old bare BIF is still there")
+	for _, old := range []string{".bif", "-320-10.bif"} {
+		if _, err := os.Stat(strings.TrimSuffix(videos[1], ".mkv") + old); err == nil {
+			t.Errorf("the old %s BIF is still there", old)
+		}
 	}
 
 	raw, err := os.ReadFile(env["EMBY_BIF_BUILDER_RECORD"])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lines := strings.Split(strings.TrimSpace(string(raw)), "\n"); len(lines) != 3 {
-		t.Errorf("the record holds %q, want a BIF written, one replaced and one removed", lines)
+	if lines := strings.Split(strings.TrimSpace(string(raw)), "\n"); len(lines) != 4 || strings.Count(string(raw), "\twrote\t") != 2 || strings.Count(string(raw), "\tremoved\t") != 2 {
+		t.Errorf("the record holds %q, want two BIFs written and the two old ones removed", lines)
 	}
 
 	r = run(t, dir, nil, "copy", "--upgrade")

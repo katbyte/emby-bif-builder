@@ -203,3 +203,45 @@ func TestAShareThatWillNotFindAFile(t *testing.T) {
 		t.Errorf("a file truly gone gave %t, %v, want it taken as gone", removed, err)
 	}
 }
+
+// A rename gives the file its new name and records it, and never goes over a file already there.
+func TestRenaming(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	from, to := filepath.Join(dir, "Show-320-10.bif"), filepath.Join(dir, "Show-640-10.bif")
+	if err := os.WriteFile(from, []byte("bif"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := place.OpenRecord(filepath.Join(t.TempDir(), "changes.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rec.Close() }()
+
+	if err := place.Rename(from, to, rec, "renamed from Show-320-10.bif"); err != nil {
+		t.Fatal(err)
+	}
+	if names := files(t, dir); len(names) != 1 || names[0] != "Show-640-10.bif" {
+		t.Errorf("the folder holds %q, want the BIF under its new name", names)
+	}
+
+	other := filepath.Join(dir, "Show.bif")
+	if err := os.WriteFile(other, []byte("another"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := place.Rename(other, to, rec, "again"); err == nil || !strings.Contains(err.Error(), "already there") {
+		t.Errorf("renaming over a file already there gave %v", err)
+	}
+	if raw, err := os.ReadFile(to); err != nil || string(raw) != "bif" { //nolint:gosec // the test's own file
+		t.Errorf("the file already there was changed: %q, %v", raw, err)
+	}
+
+	raw, err := os.ReadFile(rec.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Split(strings.TrimSpace(string(raw)), "\n"); len(lines) != 1 || !strings.Contains(lines[0], "\trenamed\t"+to+"\trenamed from Show-320-10.bif") {
+		t.Errorf("the record holds %q", lines)
+	}
+}

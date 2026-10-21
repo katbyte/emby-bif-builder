@@ -38,6 +38,7 @@ func writeStats(w io.Writer, f *FlagData, s *sources, inv *inventory.Inventory, 
 	var (
 		widths, names, makers = map[string]int{}, map[string]int{}, map[string]int{}
 		bifs, unknown         int
+		wronglyNamed          int
 		wrong                 = map[verify.Kind]int{}
 		singleShort           int
 		single, several       int
@@ -86,6 +87,9 @@ func writeStats(w io.Writer, f *FlagData, s *sources, inv *inventory.Inventory, 
 
 			widths[strconv.Itoa(b.Info.Width)]++
 			makers[plan.Maker(b.Info.Note)]++
+			if misnamed(b) {
+				wronglyNamed++
+			}
 			if b.Info.Frames == 1 {
 				single++
 				if p.Kind == verify.Short {
@@ -156,6 +160,7 @@ func writeStats(w io.Writer, f *FlagData, s *sources, inv *inventory.Inventory, 
 	color.Fprintf(w, "\n%s %s\n", paint(mark, "BIFs beside the "+scope+":"), number(bifs))
 	color.Fprintf(w, "  by width:  %s\n", tallyOf(widths, 6, "widths", byWidth))
 	color.Fprintf(w, "  by name:   %s\n", tallyOf(names, 6, "names", nil))
+	color.Fprintf(w, "  misnamed:  %s whose name does not say the width and seconds apart inside; %s\n", amount(wronglyNamed, todo), paint(quiet, "ebb rename renames them"))
 	color.Fprintf(w, "  made by:   %s\n", tallyOf(makers, 0, "", nil))
 	said := []string{fmt.Sprintf("%s broken, %s short, %s long", amount(wrong[verify.Broken], bad), amount(wrong[verify.Short], bad), amount(wrong[verify.Long], bad))}
 	for _, fix := range []string{"copy --upgrade", "build --upgrade"} {

@@ -183,3 +183,28 @@ func TestWhoMadeIt(t *testing.T) {
 		t.Error("the notes of a built BIF are wrong")
 	}
 }
+
+// A BIF's proper name says what it holds, the width of its pictures and the seconds between them, keeping the video's part of its name as it is.
+func TestProperName(t *testing.T) {
+	t.Parallel()
+
+	held := func(name string, style inventory.Style, named string, width int, interval time.Duration) inventory.BIF {
+		return inventory.BIF{Path: "/v/tv/S/" + name, Name: name, Style: style, Named: named, Info: bif.Info{Frames: 9, Interval: interval, Width: width}}
+	}
+	for _, c := range []struct {
+		b    inventory.BIF
+		want string
+	}{
+		{held("S - 01x07-320-10.bif", inventory.Sized, "320-10", 640, 10*time.Second), "/v/tv/S/S - 01x07-640-10.bif"},
+		{held("S - 01x07.bif", inventory.Bare, "", 576, 10*time.Second), "/v/tv/S/S - 01x07-576-10.bif"},
+		{held("S - 01x07-640-10.bif", inventory.Sized, "640-10", 640, 10*time.Second), "/v/tv/S/S - 01x07-640-10.bif"},
+		{held("S - 01x07-320-10.bif", inventory.Sized, "320-10", 320, 5*time.Second), "/v/tv/S/S - 01x07-320-5.bif"},
+		{held("2020-10-05.bif", inventory.Bare, "", 640, 10*time.Second), "/v/tv/S/2020-10-05-640-10.bif"},
+		{held("S - 01x07-320-10.bif", inventory.Sized, "320-10", 640, 500*time.Millisecond), ""},
+		{inventory.BIF{Path: "/v/tv/S/S - 01x07-320-10.bif", Name: "S - 01x07-320-10.bif", Err: errors.New("cut short")}, ""},
+	} {
+		if got := plan.ProperName(c.b); got != c.want {
+			t.Errorf("%s holding %dx at %s is properly %q, want %q", c.b.Name, c.b.Info.Width, c.b.Info.Interval, got, c.want)
+		}
+	}
+}

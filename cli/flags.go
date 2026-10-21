@@ -25,7 +25,7 @@ const (
 	defaultWorkers      = 8
 	defaultBuildWorkers = 1
 	defaultSize         = 640
-	defaultName         = "emby"
+	defaultName         = "size"
 	defaultFFmpeg       = "ffmpeg"
 	defaultRecord       = "~/.emby-bif-builder-changes.tsv"
 )
@@ -78,7 +78,7 @@ func configureFlags(root *cobra.Command) error {
 	pflags.String("media-paths", "", "where the videos are found here when that is not where the servers see them, as server=here,server=here: /mnt/video=/Volumes/video")
 	pflags.String("libraries", "", "the only libraries to look at, by name with a comma between: every one unless set")
 	pflags.Bool("extras", false, "give trailers, theme videos and the other extras BIFs too, not just films and episodes")
-	pflags.String("name", defaultName, "what to call the BIFs written: emby (<video>-320-10.bif, as Emby names its own, whatever the width inside), size (<video>-640-10.bif) or bare (<video>.bif)")
+	pflags.String("name", defaultName, "what to call the BIFs written: size (<video>-640-10.bif, the width inside and the seconds apart), emby (<video>-320-10.bif, whatever the width inside) or bare (<video>.bif)")
 	pflags.String("record", defaultRecord, "the file every BIF written, replaced or removed is added to, a line each; empty keeps no record")
 	pflags.Int("workers", defaultWorkers, "how many folders to read, and BIFs to cut from Jellyfin's thumbnails, at once")
 	pflags.Int("build-workers", defaultBuildWorkers, "how many videos to build BIFs from at once")

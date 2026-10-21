@@ -140,6 +140,23 @@ func Remove(path string, rec *Record, why string) error {
 	return rec.add("removed", path, why)
 }
 
+// Rename gives a file a new name in the same place, never over a file already there, and adds the renaming to the record.
+func Rename(from, to string, rec *Record, why string) error {
+	if _, err := os.Lstat(to); err == nil {
+		return fmt.Errorf("%s is already there, so %s was left as it is", filepath.Base(to), filepath.Base(from))
+	}
+
+	if err := os.Rename(from, to); err != nil {
+		return err
+	}
+	// a share can take a rename and not do it, as a Mac's can for a name whose accents are kept apart
+	if _, err := os.Lstat(to); err != nil {
+		return fmt.Errorf("renaming %s: it is not there under its new name: %w", filepath.Base(from), err)
+	}
+
+	return rec.add("renamed", to, why)
+}
+
 // removeFile removes the file with rm, and says whether it did: false for a file already gone. A share can say a file is not there that its folder
 // still lists, as a Mac's does for a name whose accents are kept as separate characters, so such a file is looked for before it is taken to be gone.
 func removeFile(path string, rm func(string) error) (bool, error) {

@@ -85,9 +85,9 @@ func (r Reason) String() string {
 type Naming int
 
 const (
-	// NameEmby is <video>-320-10.bif, the name Emby gives its own, whatever the width inside, so Emby's own task counts the video as done.
+	// NameEmby is <video>-320-10.bif, the name Emby gives its own at its first size, whatever the width inside.
 	NameEmby Naming = iota
-	// NameSize is <video>-640-10.bif, the width inside and the seconds apart.
+	// NameSize is <video>-640-10.bif, the width inside and the seconds apart: what the BIF holds, as ProperName has it.
 	NameSize
 	// NameBare is <video>.bif, as Roku players named them.
 	NameBare
@@ -100,7 +100,7 @@ var Namings = map[string]Naming{"emby": NameEmby, "size": NameSize, "bare": Name
 func ParseNaming(s string) (Naming, error) {
 	n, ok := Namings[strings.ToLower(strings.TrimSpace(s))]
 	if !ok {
-		return 0, fmt.Errorf("%q is not a way of naming: emby (<video>-320-10.bif), size (<video>-640-10.bif) or bare (<video>.bif)", s)
+		return 0, fmt.Errorf("%q is not a way of naming: size (<video>-640-10.bif), emby (<video>-320-10.bif) or bare (<video>.bif)", s)
 	}
 
 	return n, nil
@@ -119,6 +119,22 @@ func Name(v *inventory.Video, n Naming, width int, interval time.Duration) strin
 	default:
 		return filepath.Join(dir, fmt.Sprintf("%s-320-%d.bif", stem, seconds))
 	}
+}
+
+// ProperName is the path a BIF is named for what it holds: <video>-<width>-<seconds>.bif, beside where it is, keeping the video's part of its name as
+// it is. It is "" for a BIF that cannot be read, or whose pictures are under a second apart.
+func ProperName(b inventory.BIF) string {
+	if b.Err != nil || b.Info.Width <= 0 || b.Info.Interval < time.Second {
+		return ""
+	}
+	seconds := int(b.Info.Interval.Round(time.Second) / time.Second)
+
+	video := strings.TrimSuffix(b.Name, ".bif")
+	if b.Style == inventory.Sized {
+		video = strings.TrimSuffix(video, "-"+b.Named)
+	}
+
+	return filepath.Join(filepath.Dir(b.Path), fmt.Sprintf("%s-%d-%d.bif", video, b.Info.Width, seconds))
 }
 
 // Step is what is to be done for one video.
