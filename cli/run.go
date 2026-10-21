@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -9,9 +10,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/gookit/color"
+	"github.com/katbyte/emby-bif-builder/lib/bif"
 	"github.com/katbyte/emby-bif-builder/lib/emby"
 	"github.com/katbyte/emby-bif-builder/lib/inventory"
 	"github.com/katbyte/emby-bif-builder/lib/jellyfin"
@@ -19,6 +23,7 @@ import (
 	"github.com/katbyte/emby-bif-builder/lib/place"
 	"github.com/katbyte/emby-bif-builder/lib/plan"
 	"github.com/katbyte/emby-bif-builder/lib/trickplay"
+	"github.com/katbyte/emby-bif-builder/lib/verify"
 	"github.com/katbyte/go-kt/cout"
 	"github.com/katbyte/go-kt/parallel"
 	"github.com/spf13/cobra"
@@ -76,15 +81,39 @@ func (s *sources) close() {
 	}
 }
 
-// take reads what every video has, saying how far it has got every few seconds while it reads the folders, unless told to be quiet.
+// take reads what every video has, saying as each step starts and ends, and every few seconds while it reads the folders, unless told to be quiet.
 func (f *FlagData) take(ctx context.Context, s *sources, progress io.Writer) (*inventory.Inventory, error) {
-	var last time.Time
-	report := func(done, total int) {
-		if cout.Level < cout.VerbosityNormal || (time.Since(last) < 5*time.Second && done != total) {
+	var (
+		step          inventory.Step
+		started, last time.Time
+	)
+	say := func(parts ...string) { color.Fprintln(progress, strings.Join(parts, "")) }
+	report := func(e inventory.Event) {
+		if cout.Level < cout.VerbosityNormal {
 			return
 		}
-		last = time.Now()
-		_, _ = fmt.Fprintf(progress, "read %s of %s folders\n", number(done), number(total))
+		if e.Step != step {
+			step, started, last = e.Step, time.Now(), time.Now()
+		}
+		took := paint(quiet, ", in "+verify.Length(time.Since(started)))
+
+		switch {
+		case e.Step == inventory.EmbyVideos && !e.Ended:
+			say(paint(quiet, "reading Emby's videos"))
+		case e.Step == inventory.EmbyVideos:
+			say(paint(quiet, "Emby has "), paint(mark, number(e.Done)), paint(quiet, " videos in these libraries"), took)
+		case e.Step == inventory.JellyfinThumbnails && !e.Ended:
+			say(paint(quiet, "reading Jellyfin's thumbnails"))
+		case e.Step == inventory.JellyfinThumbnails:
+			say(paint(quiet, "Jellyfin has thumbnails of "), paint(mark, number(e.Done)), paint(quiet, " videos"), took)
+		case e.Ended:
+			say(paint(quiet, "read "), paint(mark, number(e.Total)), paint(quiet, " folders"), took)
+		case e.Done == 0:
+			say(paint(quiet, "reading the "), paint(mark, number(e.Total)), paint(quiet, " folders the videos are in"))
+		case time.Since(last) >= 5*time.Second:
+			last = time.Now()
+			say(paint(quiet, "read "), paint(mark, number(e.Done)), paint(quiet, " of "), paint(mark, number(e.Total)), paint(quiet, fmt.Sprintf(" folders, %d%%", e.Done*100/e.Total)))
+		}
 	}
 
 	return inventory.Take(ctx, inventory.Options{Emby: s.emby, Jellyfin: s.jellyfin, Paths: s.paths, Libraries: f.libraries(), Workers: f.Workers, Progress: report})
@@ -112,43 +141,68 @@ type tally struct {
 	failed  int
 }
 
-// carryOut does each step that is not a leave, workers at a time, and at most limit of them when limit is above 0, saying what is done as it is.
+// job is how a run makes each video's BIF: write makes it, and from says what it is made from, for the lines that say what is being done.
+type job struct {
+	write writer
+	from  func(plan.Step) string
+}
+
+// carryOut does each step that is not a leave, workers at a time, and at most limit of them when limit is above 0. Each is said as it starts, with
+// how far through the run it is, what its BIF is made from and where it goes, then what was made, how long it took and how long the rest may take.
 // A step that fails is said and counted, and the rest go on. A dry run says what would be done and does nothing.
-func carryOut(ctx context.Context, steps []plan.Step, workers, limit int, dry bool, write writer, rec *place.Record) *tally {
+func carryOut(ctx context.Context, steps []plan.Step, workers, limit int, dry bool, j job, rec *place.Record) *tally {
 	t := &tally{done: map[plan.Action]int{}, left: map[plan.Reason]int{}}
 
-	var todo []plan.Step
+	var doing []plan.Step
 	for _, s := range steps {
 		if s.Action == plan.Leave {
 			t.left[s.Reason]++
-			cout.Verbosef("<gray>left</>      %s: %s\n", s.Video.Local, s.Why)
+			cout.Verbosef("%s %s: %s\n", paint(quiet, "left     "), s.Video.Local, paint(quiet, s.Why))
 
 			continue
 		}
-		if limit > 0 && len(todo) >= limit {
+		if limit > 0 && len(doing) >= limit {
 			continue
 		}
-		todo = append(todo, s)
+		doing = append(doing, s)
+	}
+
+	// the first line of each says which of how many it is, and the lines under it line up after that
+	of := number(len(doing))
+	at := func(n int) string { return paint(mark, fmt.Sprintf("[%*s/%s]", len(of), number(n), of)) }
+	under := strings.Repeat(" ", len(of)*2+3)
+	starting := func(n int, s plan.Step, verb string) string {
+		return fmt.Sprintf("%s %s: %s\n%s %s %s\n%s %s %s\n", at(n), paint(todo, verb), s.Why, under, paint(quiet, "from     "), j.from(s), under, paint(quiet, "to       "), s.Target)
 	}
 
 	if dry {
-		for _, s := range todo {
+		for i, s := range doing {
 			t.done[s.Action]++
-			cout.Printf("would %-8s %s: %s\n", s.Action, s.Video.Local, s.Why)
+			cout.Printf("%s", starting(i+1, s, "would "+s.Action.String()))
 		}
 
 		return t
 	}
 
-	_ = parallel.Each(ctx, len(todo), workers, func(ctx context.Context, i int) error {
-		s := todo[i]
+	var (
+		started atomic.Int64
+		ended   int
+		begun   = time.Now()
+	)
+	_ = parallel.Each(ctx, len(doing), workers, func(ctx context.Context, i int) error {
+		s := doing[i]
+		n := int(started.Add(1))
+		t.mu.Lock()
+		cout.Printf("%s", starting(n, s, underway(s.Action)))
+		t.mu.Unlock()
+		start := time.Now()
 
-		data, target, err := write(ctx, s)
+		data, target, err := j.write(ctx, s)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			t.fail(s, err)
+			t.fail(at(n), s, err)
 
 			return nil
 		}
@@ -158,20 +212,23 @@ func carryOut(ctx context.Context, steps []plan.Step, workers, limit int, dry bo
 			replace = plan.Others(s.Video, target)
 		}
 		changes, err := place.Put(target, data, s.Action != plan.Make, replace, rec, s.Why)
+
 		t.mu.Lock()
+		ended++
+		left := time.Duration(float64(time.Since(begun)) / float64(ended) * float64(len(doing)-ended))
 		for _, c := range changes {
 			switch c.What {
 			case "removed":
 				t.removed++
-				cout.Printf("<yellow>removed</>   %s\n", c.Path)
+				cout.Quietf("%s %s %s\n", at(n), paint(todo, "removed  "), c.Path)
 			default:
 				t.done[s.Action]++
-				cout.Quietf("<green>%-9s</> %s\n", past(s.Action), c.Path)
+				cout.Quietf("%s %s %s: %s, in %s%s\n", at(n), paint(good, fmt.Sprintf("%-9s", past(s.Action))), c.Path, holds(data), verify.Length(time.Since(start)), paint(quiet, remaining(ended, len(doing), left)))
 			}
 		}
 		t.mu.Unlock()
 		if err != nil {
-			t.fail(s, err)
+			t.fail(at(n), s, err)
 		}
 
 		return nil
@@ -180,13 +237,46 @@ func carryOut(ctx context.Context, steps []plan.Step, workers, limit int, dry bo
 	return t
 }
 
+// holds is what a BIF just made holds, as a line saying it was made puts it: "520 pictures, 640x360, 4.1 MB".
+func holds(data []byte) string {
+	info, err := bif.Read(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return size(int64(len(data)))
+	}
+
+	return fmt.Sprintf("%s, %dx%d, %s", plural(info.Frames, "picture", "pictures"), info.Width, info.Height, size(int64(len(data))))
+}
+
+// remaining is how long the rest of a run may take, going by how long the ones done so far took, once there are enough done to tell.
+func remaining(done, of int, left time.Duration) string {
+	if done < 3 || done == of {
+		return ""
+	}
+
+	return "; about " + verify.Length(left) + " left"
+}
+
 // fail says a step failed, and counts it.
-func (t *tally) fail(s plan.Step, err error) {
+func (t *tally) fail(at string, s plan.Step, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	t.failed++
-	cout.Errorf("<red>failed</>    %s: %v\n", s.Video.Local, err)
+	cout.Errorf("%s %s %s: %s\n", at, paint(bad, "failed   "), s.Video.Local, paint(bad, err.Error()))
+}
+
+// underway is the action as it is under way, as the line that starts it says.
+func underway(a plan.Action) string {
+	switch a {
+	case plan.Make:
+		return "making"
+	case plan.Upgrade:
+		return "upgrading"
+	case plan.Remake:
+		return "remaking"
+	default:
+		return a.String()
+	}
 }
 
 // past is what was done, as a line saying so starts.
@@ -208,20 +298,20 @@ func (t *tally) say(dry bool, rec *place.Record) {
 	var done []string
 	for _, a := range []plan.Action{plan.Make, plan.Upgrade, plan.Remake} {
 		if dry {
-			done = append(done, fmt.Sprintf("would %s %s", a, number(t.done[a])))
+			done = append(done, fmt.Sprintf("would %s %s", a, amount(t.done[a], todo)))
 		} else {
-			done = append(done, fmt.Sprintf("%s %s", past(a), number(t.done[a])))
+			done = append(done, fmt.Sprintf("%s %s", past(a), amount(t.done[a], good)))
 		}
 	}
 	if !dry {
-		done = append(done, "failed "+number(t.failed))
+		done = append(done, "failed "+amount(t.failed, bad))
 	}
 	cout.Quietf("%s\n", strings.Join(done, ", "))
 
 	var left []string
-	for _, r := range []plan.Reason{plan.Done, plan.Held, plan.Elsewhere, plan.Gone, plan.Unsure} {
+	for _, r := range []plan.Reason{plan.Done, plan.Held, plan.Elsewhere, plan.Gone, plan.Unreachable, plan.Unsure} {
 		if n := t.left[r]; n > 0 {
-			left = append(left, fmt.Sprintf("%s %s", number(n), r))
+			left = append(left, fmt.Sprintf("%s %s", amount(n, leftColour[r]), r))
 		}
 	}
 	if len(left) > 0 {
@@ -229,13 +319,17 @@ func (t *tally) say(dry bool, rec *place.Record) {
 	}
 
 	if !dry && (t.removed > 0 || t.done[plan.Make]+t.done[plan.Upgrade]+t.done[plan.Remake] > 0) {
-		line := fmt.Sprintf("removed %s old BIFs", number(t.removed))
+		line := fmt.Sprintf("removed %s old BIFs", amount(t.removed, todo))
 		if rec != nil {
-			line += "; every change is recorded in " + rec.Path
+			line += paint(quiet, "; every change is recorded in "+rec.Path)
 		}
 		cout.Quietf("%s\n", line)
 	}
 }
+
+// leftColour is the colour of each count of videos left as they are: those that have what they need are good, those --upgrade or another run would
+// see to are still to do, and those not there are bad.
+var leftColour = map[plan.Reason]string{plan.Done: good, plan.Held: todo, plan.Elsewhere: quiet, plan.Gone: bad, plan.Unreachable: todo, plan.Unsure: todo}
 
 // err is the run's error: none unless a step failed.
 func (t *tally) err() error {

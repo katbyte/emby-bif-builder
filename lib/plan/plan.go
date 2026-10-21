@@ -57,6 +57,8 @@ const (
 	Elsewhere
 	// Unsure is a video ebb could not tell the state of.
 	Unsure
+	// Unreachable is a video that is there but cannot be opened from here, nor a BIF written beside it under its name.
+	Unreachable
 )
 
 // String is the reason as the totals say it.
@@ -72,6 +74,8 @@ func (r Reason) String() string {
 		return "have Jellyfin thumbnails, for copy"
 	case Unsure:
 		return "could not be told"
+	case Unreachable:
+		return "cannot be opened from here"
 	default:
 		return "unknown"
 	}
@@ -145,8 +149,8 @@ type CopyOptions struct {
 // Copy is what to do for a video Jellyfin has made thumbnails of.
 func Copy(v *inventory.Video, o CopyOptions) Step {
 	s := Step{Video: v}
-	if why, ok := missing(v); ok {
-		s.Why, s.Reason = why, Gone
+	if why, reason, ok := missing(v); ok {
+		s.Why, s.Reason = why, reason
 
 		return s
 	}
@@ -209,8 +213,8 @@ type BuildOptions struct {
 // Build is what to do for a video when building BIFs from the videos themselves.
 func Build(v *inventory.Video, o BuildOptions) Step {
 	s := Step{Video: v, Width: o.Width}
-	if why, ok := missing(v); ok {
-		s.Why, s.Reason = why, Gone
+	if why, reason, ok := missing(v); ok {
+		s.Why, s.Reason = why, reason
 
 		return s
 	}
@@ -246,16 +250,18 @@ func Build(v *inventory.Video, o BuildOptions) Step {
 	return s
 }
 
-// missing is why nothing can be done for a video that is not there, and whether it is not.
-func missing(v *inventory.Video) (string, bool) {
+// missing is why nothing can be done for a video that is not there, or cannot be reached from here, how the totals count it, and whether it is so.
+func missing(v *inventory.Video) (string, Reason, bool) {
 	switch {
 	case v.Err != nil:
-		return fmt.Sprintf("its folder cannot be read: %v", v.Err), true
+		return fmt.Sprintf("its folder cannot be read: %v", v.Err), Gone, true
 	case !v.Found:
-		return "the video is not where Emby has it", true
+		return "the video is not where Emby has it", Gone, true
+	case v.Unreachable:
+		return "the video " + inventory.ErrUnreachable.Error(), Unreachable, true
 	}
 
-	return "", false
+	return "", 0, false
 }
 
 // upgrade makes the step an Upgrade when there is leave to, and otherwise says that one would be.
@@ -310,6 +316,6 @@ func Maker(note string) string {
 	case isOurs(note, "ffmpeg"):
 		return "ebb, from the video"
 	default:
-		return "not ebb"
+		return "Emby or another program"
 	}
 }

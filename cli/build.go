@@ -12,6 +12,7 @@ import (
 	"github.com/katbyte/emby-bif-builder/lib/ffmpeg"
 	"github.com/katbyte/emby-bif-builder/lib/inventory"
 	"github.com/katbyte/emby-bif-builder/lib/plan"
+	"github.com/katbyte/emby-bif-builder/lib/verify"
 	"github.com/katbyte/go-kt/cout"
 	"github.com/spf13/cobra"
 )
@@ -85,7 +86,7 @@ func runBuild(cmd *cobra.Command, f *FlagData, upgrade, dry bool, limit int) err
 	}
 	defer s.close()
 	if s.jellyfin == nil {
-		cout.Printf("Jellyfin's database is not set (--jf-db-path, %s), so videos Jellyfin has thumbnails of are built from too\n", envNames["jf-db-path"])
+		cout.Printf("%s\n", paint(todo, fmt.Sprintf("Jellyfin's database is not set (--jf-db-path, %s), so videos Jellyfin has thumbnails of are built from too", envNames["jf-db-path"])))
 	}
 
 	inv, err := f.take(ctx, s, cmd.ErrOrStderr())
@@ -118,7 +119,7 @@ func runBuild(cmd *cobra.Command, f *FlagData, upgrade, dry bool, limit int) err
 	defer func() { _ = rec.Close() }()
 
 	b := builder{o: ffmpeg.Options{Program: f.FFmpeg, HWAccel: f.HWAccel, KeyFrames: f.KeyFrames, Width: f.Size, Quality: ffmpegQuality}, naming: naming, every: every}
-	t := carryOut(ctx, steps, f.BuildWorkers, limit, dry, b.build, rec)
+	t := carryOut(ctx, steps, f.BuildWorkers, limit, dry, job{write: b.build, from: b.from}, rec)
 	t.say(dry, rec)
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("stopped: %w", err)
@@ -144,6 +145,24 @@ type builder struct {
 	o      ffmpeg.Options
 	naming plan.Naming
 	every  map[string]time.Duration
+}
+
+// from is the video a step's BIF is built from and how, as the line that starts it says.
+func (b builder) from(step plan.Step) string {
+	every := b.every[step.Video.Library]
+	if every <= 0 {
+		every = defaultInterval
+	}
+
+	how := "every frame"
+	if b.o.KeyFrames {
+		how = "key frames only"
+	}
+	if b.o.HWAccel != "" {
+		how += ", on " + b.o.HWAccel
+	}
+
+	return fmt.Sprintf("%s, a picture every %s with ffmpeg, %s", step.Video.Local, verify.Length(every), how)
 }
 
 // build makes a step's BIF from the video, with a note in its first picture saying it was built so. A BIF named for its width is named once the

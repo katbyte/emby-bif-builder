@@ -2,6 +2,7 @@ package emby_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/katbyte/emby-bif-builder/lib/emby"
 	"github.com/katbyte/emby-bif-builder/lib/servertest"
@@ -16,8 +17,8 @@ func open(t *testing.T) *emby.DB {
 	s.Library("Anime (Movies)", "movies", "movies/anime")
 	s.Library("Music", "music", "music")
 	s.Show("tv/Show (2020)")
-	s.Film("movies/Film (2000)/Film (2000).mkv")
-	s.Film("movies/anime/Akira (1988)/Akira (1988).mkv")
+	s.Length(s.Film("movies/Film (2000)/Film (2000).mkv"), 2*time.Hour+3*time.Second)
+	s.Length(s.Film("movies/anime/Akira (1988)/Akira (1988).mkv"), 124*time.Minute)
 	s.Trailer("movies/Film (2000)/trailers/Film (2000)-trailer.mkv")
 	s.Episode("elsewhere/Show - 01x01.mkv")
 	s.Done()
@@ -106,6 +107,50 @@ func TestFindingAnItem(t *testing.T) {
 	w, h, err := db.Size(t.Context(), it.ID)
 	if err != nil || w != 1920 || h != 1080 {
 		t.Errorf("the film is %dx%d (%v), want 1920x1080", w, h, err)
+	}
+}
+
+// Each video's length comes by its ID, however many are asked for at once, and a video Emby has no length for, or an ID it has nothing for, is left
+// out.
+func TestTheLengths(t *testing.T) {
+	t.Parallel()
+
+	db := open(t)
+	libs, err := db.Libraries(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := db.Items(t.Context(), libs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ids := make([]int64, 0, len(items)+1200)
+	want := map[int64]time.Duration{}
+	for _, it := range items {
+		ids = append(ids, it.ID)
+		switch it.Path {
+		case "/mnt/video/movies/Film (2000)/Film (2000).mkv":
+			want[it.ID] = 2*time.Hour + 3*time.Second
+		case "/mnt/video/movies/anime/Akira (1988)/Akira (1988).mkv":
+			want[it.ID] = 124 * time.Minute
+		}
+	}
+	for id := range int64(1200) {
+		ids = append(ids, 10_000+id)
+	}
+
+	got, err := db.Lengths(t.Context(), ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Errorf("lengths %v, want %v", got, want)
+	}
+	for id, length := range want {
+		if got[id] != length {
+			t.Errorf("item %d is %s long, want %s", id, got[id], length)
+		}
 	}
 }
 

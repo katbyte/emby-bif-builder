@@ -126,13 +126,21 @@ func Read(r io.ReaderAt, size int64) (Info, error) {
 	}
 
 	first := int64(binary.LittleEndian.Uint32(index[4:]))
-	prev := first
+	prev, at := first, binary.LittleEndian.Uint32(index[0:])
 	for i := 1; i <= n; i++ {
 		off := int64(binary.LittleEndian.Uint32(index[i*entrySize+4:]))
 		if off < prev {
 			return Info{}, fmt.Errorf("broken: picture %d starts before picture %d", i, i-1)
 		}
 		prev = off
+
+		if i < n {
+			next := binary.LittleEndian.Uint32(index[i*entrySize:])
+			if next <= at {
+				return Info{}, fmt.Errorf("broken: picture %d is not later in the video than picture %d", i, i-1)
+			}
+			at = next
+		}
 	}
 	if last := binary.LittleEndian.Uint32(index[n*entrySize:]); last != end {
 		return Info{}, errors.New("broken: its index does not end as a BIF's does")
@@ -146,11 +154,7 @@ func Read(r io.ReaderAt, size int64) (Info, error) {
 
 	info := Info{Frames: n, Interval: unit}
 	if n > 1 {
-		t0, t1 := binary.LittleEndian.Uint32(index[0:]), binary.LittleEndian.Uint32(index[entrySize:])
-		if t1 <= t0 {
-			return Info{}, errors.New("broken: its first two pictures are not in time order")
-		}
-		info.Interval = time.Duration(t1-t0) * unit
+		info.Interval = time.Duration(binary.LittleEndian.Uint32(index[entrySize:])-binary.LittleEndian.Uint32(index[0:])) * unit
 	}
 
 	pic := make([]byte, min(int64(firstPeek), int64(binary.LittleEndian.Uint32(index[entrySize+4:]))-first))
@@ -165,6 +169,39 @@ func Read(r io.ReaderAt, size int64) (Info, error) {
 	info.Note = NoteOf(pic)
 
 	return info, nil
+}
+
+// Pictures reads every picture of the BIF of this size and says which is the first that cannot be shown, and why. It reads all of the file, where
+// Read reads only its start.
+func Pictures(r io.ReaderAt, size int64) error {
+	// the start is read first, so a large file that is not a BIF is never read whole
+	info, err := Read(r, size)
+	if err != nil {
+		return err
+	}
+
+	all := make([]byte, size)
+	if _, err := r.ReadAt(all, 0); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+
+	index := all[headerSize : headerSize+entrySize*(info.Frames+1)]
+	for i := range info.Frames {
+		from, to := binary.LittleEndian.Uint32(index[i*entrySize+4:]), binary.LittleEndian.Uint32(index[(i+1)*entrySize+4:])
+		if from == to {
+			return fmt.Errorf("broken: picture %d is empty", i)
+		}
+
+		img, err := jpeg.Decode(bytes.NewReader(all[from:to]))
+		if err != nil {
+			return fmt.Errorf("broken: picture %d cannot be shown: %w", i, err)
+		}
+		if b := img.Bounds(); b.Dx() != info.Width || b.Dy() != info.Height {
+			return fmt.Errorf("broken: picture %d is %dx%d, where the first is %dx%d", i, b.Dx(), b.Dy(), info.Width, info.Height)
+		}
+	}
+
+	return nil
 }
 
 // WithNote is the JPEG with a comment saying who made it, where a JPEG's comments go: straight after the two bytes that start it. Anything that

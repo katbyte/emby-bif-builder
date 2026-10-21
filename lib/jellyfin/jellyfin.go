@@ -35,7 +35,7 @@ func (v Video) Widest() (trickplay.Info, bool) {
 
 // DB is Jellyfin's database, open read-only.
 type DB struct {
-	db *sql.DB
+	db *readonly.DB
 }
 
 // Open opens Jellyfin's database, jellyfin.db in its data folder, without being able to write to it.
@@ -58,10 +58,18 @@ func (d *DB) Close() error {
 const selectThumbnails = `SELECT t.ItemId, b.Path, b.Type, t.Width, t.Height, t.TileWidth, t.TileHeight, t.ThumbnailCount, t.Interval
 FROM TrickplayInfos t JOIN BaseItems b ON b.Id = t.ItemId`
 
+// selectEveryThumbnail is selectThumbnails for every video at once. Each item's ID and type, and each item's path, are read whole from an index
+// of their own and joined on the item's row, where looking each video up among the items reads a page of the database for each: seconds over a
+// share, not a minute or two. It is one question, so the rows it joins are read together.
+const selectEveryThumbnail = `WITH items AS MATERIALIZED (SELECT rowid AS r, Id, Type FROM BaseItems),
+paths AS MATERIALIZED (SELECT rowid AS r, Path FROM BaseItems WHERE Path IS NOT NULL)
+SELECT t.ItemId, p.Path, i.Type, t.Width, t.Height, t.TileWidth, t.TileHeight, t.ThumbnailCount, t.Interval
+FROM TrickplayInfos t JOIN items i ON i.Id = t.ItemId JOIN paths p ON p.r = i.r`
+
 // Thumbnails is every video Jellyfin has made thumbnails of, keyed on the video's path.
 func (d *DB) Thumbnails(ctx context.Context) (map[string]Video, error) {
 	var got sets
-	if err := readonly.Rows(ctx, d.db, got.start, got.each, selectThumbnails+" WHERE b.Path IS NOT NULL"); err != nil {
+	if err := d.db.Rows(ctx, got.start, got.each, selectEveryThumbnail); err != nil {
 		return nil, err
 	}
 
@@ -87,7 +95,7 @@ func (d *DB) ByPath(ctx context.Context, path string) (Video, bool, error) {
 // one is the video the condition picks, with its thumbnails or without: a video Jellyfin has not made any of yet is still one it has.
 func (d *DB) one(ctx context.Context, where, arg string) (Video, bool, error) {
 	v := Video{}
-	err := readonly.Retry(ctx, func() error {
+	err := d.db.Retry(ctx, func() error {
 		return d.db.QueryRowContext(ctx, "SELECT b.Id, b.Path, b.Type FROM BaseItems b WHERE "+where, arg).Scan(&v.ID, &v.Path, &v.Type)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -99,7 +107,7 @@ func (d *DB) one(ctx context.Context, where, arg string) (Video, bool, error) {
 	v.Type = shortType(v.Type)
 
 	var got sets
-	if err := readonly.Rows(ctx, d.db, got.start, got.each, selectThumbnails+" WHERE t.ItemId = ?", v.ID); err != nil {
+	if err := d.db.Rows(ctx, got.start, got.each, selectThumbnails+" WHERE t.ItemId = ?", v.ID); err != nil {
 		return Video{}, false, err
 	}
 	if found := got.done(); len(found) == 1 {

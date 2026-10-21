@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gookit/color"
 	"github.com/katbyte/emby-bif-builder/lib/emby"
 	"github.com/katbyte/emby-bif-builder/lib/inventory"
 	"github.com/katbyte/emby-bif-builder/lib/jellyfin"
@@ -137,13 +138,14 @@ func (s *sources) resolve(ctx context.Context, libs []emby.Library, arg string) 
 	return first, nil
 }
 
-// describe writes what the video at path has.
+// describe writes what the video at path has, each finding in the colour of what it means.
 func (s *sources) describe(ctx context.Context, w io.Writer, libs []emby.Library, path string) error {
-	_, _ = fmt.Fprintln(w, path)
+	color.Fprintln(w, paint(mark, path))
+	label := func(name string) string { return paint(quiet, fmt.Sprintf("  %-12s", name)) }
 
 	v := &inventory.Video{Path: path, Local: s.paths.Local(path)}
 	if v.Local != path {
-		_, _ = fmt.Fprintf(w, "  found here at %s\n", v.Local)
+		color.Fprintf(w, "%s %s\n", paint(quiet, "  found here at"), v.Local)
 	}
 
 	item, found, err := s.emby.ByPath(ctx, libs, path)
@@ -152,17 +154,19 @@ func (s *sources) describe(ctx context.Context, w io.Writer, libs []emby.Library
 	}
 	if found {
 		v.Item = item
-		_, _ = fmt.Fprintf(w, "  Emby:      %s %d, in %s\n", item.Kind, item.ID, orNone(item.Library, "no library"))
+		color.Fprintf(w, "%s%s %d, in %s\n", label("Emby:"), item.Kind, item.ID, orNone(item.Library, paint(todo, "no library")))
 	} else {
-		_, _ = fmt.Fprintln(w, "  Emby:      does not have it")
+		color.Fprintf(w, "%s%s\n", label("Emby:"), paint(todo, "does not have it"))
 	}
 
 	_ = inventory.Folder(ctx, filepath.Dir(v.Local), []*inventory.Video{v})
 	switch {
 	case v.Err != nil:
-		_, _ = fmt.Fprintf(w, "  video:     its folder cannot be read: %v\n", v.Err)
+		color.Fprintf(w, "%s%s\n", label("video:"), paint(bad, fmt.Sprintf("its folder cannot be read: %v", v.Err)))
 	case !v.Found:
-		_, _ = fmt.Fprintln(w, "  video:     is not there")
+		color.Fprintf(w, "%s%s\n", label("video:"), paint(bad, "is not there"))
+	case v.Unreachable:
+		color.Fprintf(w, "%s%s\n", label("video:"), paint(todo, inventory.ErrUnreachable.Error()))
 	}
 
 	var jf jellyfin.Video
@@ -175,36 +179,38 @@ func (s *sources) describe(ctx context.Context, w io.Writer, libs []emby.Library
 		return errors.New("nothing has it: not Emby, not Jellyfin, and there is no such file")
 	}
 	if len(v.BIFs) == 0 {
-		_, _ = fmt.Fprintln(w, "  BIF:       none")
+		color.Fprintf(w, "%s%s\n", label("BIF:"), paint(todo, "none"))
 	}
 	for _, b := range v.BIFs {
-		_, _ = fmt.Fprintf(w, "  BIF:       %s\n", b.Name)
-		if b.Err != nil {
-			_, _ = fmt.Fprintf(w, "             cannot be read: %v\n", b.Err)
-
-			continue
+		color.Fprintf(w, "%s%s\n", label("BIF:"), b.Name)
+		switch {
+		case errors.Is(b.Err, inventory.ErrUnreachable):
+			color.Fprintf(w, "%s%s\n", label(""), paint(todo, "cannot be opened from here"))
+		case b.Err != nil:
+			color.Fprintf(w, "%s%s\n", label(""), paint(bad, fmt.Sprintf("cannot be read: %v", b.Err)))
+		default:
+			color.Fprintf(w, "%s%dx%d, %s %s apart, %s, written %s, made by %s\n", label(""), b.Info.Width, b.Info.Height, plural(b.Info.Frames, "picture", "pictures"), b.Info.Interval, size(b.Bytes), b.Changed.Format(time.DateTime), plan.Maker(b.Info.Note))
 		}
-		_, _ = fmt.Fprintf(w, "             %dx%d, %s %s apart, %s, written %s, made by %s\n", b.Info.Width, b.Info.Height, plural(b.Info.Frames, "picture", "pictures"), b.Info.Interval, size(b.Bytes), b.Changed.Format(time.DateTime), plan.Maker(b.Info.Note))
 	}
 
 	if s.jellyfin == nil {
 		return nil
 	}
 	if !found {
-		_, _ = fmt.Fprintln(w, "  Jellyfin:  does not have it")
+		color.Fprintf(w, "%s%s\n", label("Jellyfin:"), paint(todo, "does not have it"))
 
 		return nil
 	}
-	_, _ = fmt.Fprintf(w, "  Jellyfin:  %s %s\n", strings.ToLower(jf.Type), jf.ID)
+	color.Fprintf(w, "%s%s %s\n", label("Jellyfin:"), strings.ToLower(jf.Type), jf.ID)
 	if len(jf.Thumbnails) == 0 {
-		_, _ = fmt.Fprintln(w, "  thumbnails: none yet")
+		color.Fprintf(w, "%s%s\n", label("thumbnails:"), paint(todo, "none yet"))
 
 		return nil
 	}
 	for _, i := range jf.Thumbnails {
-		_, _ = fmt.Fprintf(w, "  thumbnails: %dx%d, %d of them %s apart, on sheets of %dx%d\n", i.Width, i.Height, i.Count, i.Interval, i.Columns, i.Rows)
+		color.Fprintf(w, "%s%dx%d, %d of them %s apart, on sheets of %dx%d\n", label("thumbnails:"), i.Width, i.Height, i.Count, i.Interval, i.Columns, i.Rows)
 		if s.trickplay != "" {
-			_, _ = fmt.Fprintf(w, "             in %s: %s\n", i.Folder(s.trickplay), s.sheets(i))
+			color.Fprintf(w, "%s%s %s: %s\n", label(""), paint(quiet, "in"), i.Folder(s.trickplay), s.sheets(i))
 		}
 	}
 
@@ -216,11 +222,26 @@ func (s *sources) describe(ctx context.Context, w io.Writer, libs []emby.Library
 			if upgrade {
 				flag = " --upgrade"
 			}
-			_, _ = fmt.Fprintf(w, "  copy%s would %s: %s\n", flag, st.Action, st.Why)
+			color.Fprintf(w, "  copy%s would %s: %s\n", flag, paint(stepColour(st), st.Action.String()), st.Why)
 		}
 	}
 
 	return nil
+}
+
+// stepColour is the colour of what a run would do for a video: good when it has what it needs, to do when the run or --upgrade would see to it,
+// and bad when it cannot be done.
+func stepColour(st plan.Step) string {
+	switch {
+	case st.Action != plan.Leave:
+		return todo
+	case st.Reason == plan.Done:
+		return good
+	case st.Reason == plan.Gone:
+		return bad
+	default:
+		return todo
+	}
 }
 
 // sheets says how many of a set's sheets are there, and when they were written.
@@ -232,7 +253,11 @@ func (s *sources) sheets(i trickplay.Info) string {
 		}
 	}
 
-	said := fmt.Sprintf("%d of %d sheets there", there, i.Sheets())
+	colour := good
+	if there < i.Sheets() {
+		colour = bad
+	}
+	said := paint(colour, fmt.Sprintf("%d of %d sheets there", there, i.Sheets()))
 	if changed, err := s.changed(i); err == nil {
 		said += ", written " + changed.Format(time.DateTime)
 	}

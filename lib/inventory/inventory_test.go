@@ -1,9 +1,12 @@
 package inventory_test
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,13 +38,23 @@ func take(t *testing.T, s *servertest.Servers, libraries ...string) *inventory.I
 		t.Fatal(err)
 	}
 
-	var seen int
-	inv, err := inventory.Take(t.Context(), inventory.Options{Emby: e, Jellyfin: j, Paths: m, Libraries: libraries, Workers: 2, Progress: func(done, _ int) { seen = done }})
+	var mu sync.Mutex
+	ended := map[inventory.Step]int{}
+	progress := func(ev inventory.Event) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if ev.Ended {
+			ended[ev.Step]++
+		}
+	}
+
+	inv, err := inventory.Take(t.Context(), inventory.Options{Emby: e, Jellyfin: j, Paths: m, Libraries: libraries, Workers: 2, Progress: progress})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if seen == 0 && len(inv.Videos) > 0 {
-		t.Error("nothing was said of how the reading went")
+	if ended[inventory.EmbyVideos] != 1 || ended[inventory.JellyfinThumbnails] != 1 || ended[inventory.Folders] != 1 {
+		t.Errorf("the steps ended %v times, want each once", ended)
 	}
 
 	return inv
@@ -268,5 +281,48 @@ func TestStems(t *testing.T) {
 	}
 	if got := inventory.Stem("/a/b/Show - 01x01.part1.mkv"); got != "Show - 01x01.part1" {
 		t.Errorf("stem %q", got)
+	}
+}
+
+// A video whose name has its accents kept apart, which a Mac's share lists but will not open, is marked as out of reach, its BIF with it, rather than
+// its BIF taken for broken. A video with an ordinary name is not tried, and one that opens is not out of reach.
+func TestUnreachableNames(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	write := func(name string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("not really a video"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		return path
+	}
+	apart := norm.NFD.String("Cr\u00e8me Br\u00fbl\u00e9e")
+	write(apart + "-320-10.bif")
+	write("Plain-320-10.bif")
+	videos := []*inventory.Video{{Local: write(apart + ".mp4")}, {Local: write("Plain.mp4")}}
+
+	var tried []string
+	refuses := func(path string) (*os.File, error) {
+		tried = append(tried, path)
+
+		return nil, &fs.PathError{Op: "open", Path: path, Err: fs.ErrNotExist}
+	}
+	inventory.FolderWith(t.Context(), dir, videos, refuses)
+
+	far, plain := videos[0], videos[1]
+	if !far.Found || !far.Unreachable || len(far.BIFs) != 1 || !errors.Is(far.BIFs[0].Err, inventory.ErrUnreachable) {
+		t.Errorf("the video named with its accents apart is %+v, want it found, out of reach, and its BIF with it", far)
+	}
+	if !plain.Found || plain.Unreachable || len(plain.BIFs) != 1 || errors.Is(plain.BIFs[0].Err, inventory.ErrUnreachable) {
+		t.Errorf("the plainly named video is %+v, want it found and in reach", plain)
+	}
+	if len(tried) != 1 || tried[0] != far.Local {
+		t.Errorf("tried opening %q, want only the video named with its accents apart", tried)
+	}
+
+	if inventory.UnreachableWith(far.Local, os.Open) {
+		t.Error("a video that opens is taken to be out of reach")
 	}
 }

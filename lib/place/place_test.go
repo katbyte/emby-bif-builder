@@ -180,3 +180,26 @@ func TestRemovingAStray(t *testing.T) {
 		t.Errorf("the record holds %q", lines)
 	}
 }
+
+// A share that says a file is not there while its folder lists it, as a Mac's does for a name whose accents are kept apart, has it left and said,
+// not taken to be removed. One that says so of a file truly gone is believed.
+func TestAShareThatWillNotFindAFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	listed := filepath.Join(dir, "Crème-320-10.bif")
+	if err := os.WriteFile(listed, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refuses := func(path string) error { return &os.PathError{Op: "unlink", Path: path, Err: os.ErrNotExist} }
+
+	removed, err := place.RemoveWith(listed, refuses)
+	if removed || err == nil || !strings.Contains(err.Error(), "its folder lists it") {
+		t.Errorf("a file the share will not find gave %t, %v, want it said that the folder lists it", removed, err)
+	}
+
+	removed, err = place.RemoveWith(filepath.Join(dir, "Gone-320-10.bif"), refuses)
+	if removed || err != nil {
+		t.Errorf("a file truly gone gave %t, %v, want it taken as gone", removed, err)
+	}
+}

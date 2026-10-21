@@ -1,14 +1,15 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"slices"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 
+	"github.com/gookit/color"
 	"github.com/katbyte/emby-bif-builder/lib/emby"
 	"github.com/katbyte/emby-bif-builder/lib/inventory"
 	"github.com/katbyte/emby-bif-builder/lib/plan"
@@ -82,6 +83,7 @@ func writeStats(w io.Writer, f *FlagData, s *sources, inv *inventory.Inventory) 
 	var (
 		widths, names, makers = map[string]int{}, map[string]int{}, map[string]int{}
 		bifs, unreadable      int
+		unopened              int
 		single, several       int
 		jfWidths              = map[int]int{}
 		jfVideos, remakes     int
@@ -115,6 +117,11 @@ func writeStats(w io.Writer, f *FlagData, s *sources, inv *inventory.Inventory) 
 		}
 		for _, b := range v.BIFs {
 			names[nameOf(b)]++
+			if errors.Is(b.Err, inventory.ErrUnreachable) {
+				unopened++
+
+				continue
+			}
 			if b.Err != nil {
 				unreadable++
 
@@ -147,8 +154,11 @@ func writeStats(w io.Writer, f *FlagData, s *sources, inv *inventory.Inventory) 
 		}
 	}
 
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', tabwriter.AlignRight)
-	_, _ = fmt.Fprintln(tw, "library\tfilms\tshows\tepisodes\textras\twith a BIF\twithout\tnot found\tJellyfin has\tto copy\tto upgrade\t")
+	head := []string{"library", "films", "shows", "episodes", "extras", "with a BIF", "without", "not found", "Jellyfin has", "to copy", "to upgrade"}
+	for i, h := range head {
+		head[i] = paint(mark, h)
+	}
+	rows := [][]string{head}
 	var total libraryCounts
 	for _, l := range inv.Libraries {
 		// a library of music or photos has none of what is counted
@@ -156,37 +166,53 @@ func writeStats(w io.Writer, f *FlagData, s *sources, inv *inventory.Inventory) 
 		if c.films+c.shows+c.episodes+c.extras == 0 {
 			continue
 		}
-		row(tw, l.Name, c)
+		rows = append(rows, row(l.Name, c))
 		total.films, total.shows, total.episodes, total.extras = total.films+c.films, total.shows+c.shows, total.episodes+c.episodes, total.extras+c.extras
 		total.with, total.without, total.gone = total.with+c.with, total.without+c.without, total.gone+c.gone
 		total.jellyfin, total.copyable, total.upgradable = total.jellyfin+c.jellyfin, total.copyable+c.copyable, total.upgradable+c.upgradable
 	}
-	row(tw, "total", &total)
-	_ = tw.Flush()
+	rows = append(rows, row(paint(mark, "total"), &total))
+	for _, line := range table(rows) {
+		color.Fprintln(w, line)
+	}
 
 	scope := "films and episodes"
 	if f.Extras {
 		scope = "films, episodes and extras"
 	}
-	_, _ = fmt.Fprintf(w, "\nThe BIF and Jellyfin columns count %s. To copy is what copy would make a BIF for; to upgrade, what copy --upgrade would replace.\n", scope)
+	color.Fprintln(w, paint(quiet, "\nThe BIF and Jellyfin columns count "+scope+". To copy is what copy would make a BIF for; to upgrade, what copy --upgrade would replace."))
+	if total.gone > 0 {
+		color.Fprintln(w, paint(quiet, "ebb show not-found lists the videos not found."))
+	}
 	if remakes > 0 {
-		_, _ = fmt.Fprintf(w, "Jellyfin has also made its thumbnails again for %s that ebb cut BIFs of, which copy cuts again.\n", plural(remakes, "video", "videos"))
+		color.Fprintf(w, "Jellyfin has also made its thumbnails again for %s that ebb cut BIFs of, which copy cuts again.\n", counted(remakes, "video", "videos", todo))
 	}
 
-	_, _ = fmt.Fprintf(w, "\nBIFs beside the %s: %s\n", scope, number(bifs))
-	_, _ = fmt.Fprintf(w, "  by width:  %s\n", tallyOf(widths, 6, "widths"))
-	_, _ = fmt.Fprintf(w, "  by name:   %s\n", tallyOf(names, 6, "names"))
-	_, _ = fmt.Fprintf(w, "  made by:   %s\n", tallyOf(makers, 0, ""))
-	_, _ = fmt.Fprintf(w, "  that cannot be read: %s; holding a single picture: %s; videos with more than one: %s\n", number(unreadable), number(single), number(several))
+	// a width is good once it is as wide as ebb makes them, and one to upgrade when it is narrower
+	byWidth := func(w string) string {
+		if n, err := strconv.Atoi(w); err == nil && n >= f.Size {
+			return good
+		}
+
+		return todo
+	}
+	color.Fprintf(w, "\n%s %s\n", paint(mark, "BIFs beside the "+scope+":"), number(bifs))
+	color.Fprintf(w, "  by width:  %s\n", tallyOf(widths, 6, "widths", byWidth))
+	color.Fprintf(w, "  by name:   %s\n", tallyOf(names, 6, "names", nil))
+	color.Fprintf(w, "  made by:   %s\n", tallyOf(makers, 0, "", nil))
+	color.Fprintf(w, "  that cannot be read: %s; holding a single picture: %s; videos with more than one: %s; %s\n", amount(unreadable, bad), amount(single, todo), amount(several, todo), paint(quiet, "ebb verify lists those that are wrong"))
+	if unopened > 0 {
+		color.Fprintf(w, "  that cannot be opened from here, as a Mac cannot open a name on a share whose accents are kept as separate characters: %s; %s\n", amount(unopened, todo), paint(quiet, "run ebb where the files are to read them"))
+	}
 
 	var strayBytes int64
 	for _, st := range inv.Strays {
 		strayBytes += st.Bytes
 	}
-	_, _ = fmt.Fprintf(w, "  strays, beside no video of their name or half written: %s, %s; ebb strays lists them\n", number(len(inv.Strays)), size(strayBytes))
+	color.Fprintf(w, "  strays, beside no video of their name or half written: %s, %s; %s\n", amount(len(inv.Strays), todo), size(strayBytes), paint(quiet, "ebb strays lists them"))
 
 	if s.jellyfin == nil {
-		_, _ = fmt.Fprintf(w, "\nJellyfin is left out: --jf-db-path (%s) is not set.\n", envNames["jf-db-path"])
+		color.Fprintf(w, "\n%s\n", paint(todo, fmt.Sprintf("Jellyfin is left out: --jf-db-path (%s) is not set.", envNames["jf-db-path"])))
 
 		return
 	}
@@ -195,14 +221,14 @@ func writeStats(w io.Writer, f *FlagData, s *sources, inv *inventory.Inventory) 
 	for width, n := range jfWidths {
 		jw[strconv.Itoa(width)] = n
 	}
-	_, _ = fmt.Fprintf(w, "\nJellyfin has thumbnails of %s of these videos\n", number(jfVideos))
-	_, _ = fmt.Fprintf(w, "  by width:  %s\n", tallyOf(jw, 6, "widths"))
-	_, _ = fmt.Fprintf(w, "  and of %s videos in these libraries' folders that Emby does not have\n", number(len(inv.JellyfinOnly)))
+	color.Fprintf(w, "\n%s %s %s\n", paint(mark, "Jellyfin has thumbnails of"), number(jfVideos), paint(mark, "of these videos"))
+	color.Fprintf(w, "  by width:  %s\n", tallyOf(jw, 6, "widths", byWidth))
+	color.Fprintf(w, "  and of %s videos in these libraries' folders that Emby does not have\n", amount(len(inv.JellyfinOnly), todo))
 }
 
-// row writes one library's line.
-func row(w io.Writer, name string, c *libraryCounts) {
-	_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\n", name, number(c.films), number(c.shows), number(c.episodes), number(c.extras), number(c.with), number(c.without), number(c.gone), number(c.jellyfin), number(c.copyable), number(c.upgradable))
+// row is one library's line of the table, each count in the colour of what it means.
+func row(name string, c *libraryCounts) []string {
+	return []string{name, amount(c.films, ""), amount(c.shows, ""), amount(c.episodes, ""), amount(c.extras, ""), amount(c.with, good), amount(c.without, todo), amount(c.gone, bad), amount(c.jellyfin, ""), amount(c.copyable, todo), amount(c.upgradable, todo)}
 }
 
 // nameOf is how a BIF is named, as the counts group them: -320-10, or bare.
@@ -215,8 +241,8 @@ func nameOf(b inventory.BIF) string {
 }
 
 // tallyOf is counts as "320: 21,903, 640: 3", the most first. When most is above 0 only that many are named, and the rest are counted together as
-// so many other of what: "26 other widths: 201".
-func tallyOf(counts map[string]int, most int, what string) string {
+// so many other of what: "26 other widths: 201". colourOf, when given, is the colour each is named in.
+func tallyOf(counts map[string]int, most int, what string, colourOf func(string) string) string {
 	if len(counts) == 0 {
 		return "none"
 	}
@@ -238,7 +264,11 @@ func tallyOf(counts map[string]int, most int, what string) string {
 
 			continue
 		}
-		parts = append(parts, k+": "+number(counts[k]))
+		key := k
+		if colourOf != nil {
+			key = paint(colourOf(k), k)
+		}
+		parts = append(parts, key+": "+number(counts[k]))
 	}
 	if left := len(keys) - len(parts); left > 0 {
 		parts = append(parts, fmt.Sprintf("%d other %s: %s", left, what, number(rest)))

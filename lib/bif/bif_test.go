@@ -131,6 +131,13 @@ func TestWhatIsNotABIF(t *testing.T) {
 	backwards := bytes.Clone(good)
 	binary.LittleEndian.PutUint32(backwards[72:], 0)
 
+	b.Reset()
+	if err := bif.Write(&b, 10*time.Second, [][]byte{picture(t, 16, 16, 1), picture(t, 16, 16, 2), picture(t, 16, 16, 3)}); err != nil {
+		t.Fatal(err)
+	}
+	laterBackwards := bytes.Clone(b.Bytes())
+	binary.LittleEndian.PutUint32(laterBackwards[80:], 1)
+
 	none := bytes.Clone(good)
 	binary.LittleEndian.PutUint32(none[12:], 0)
 
@@ -143,10 +150,51 @@ func TestWhatIsNotABIF(t *testing.T) {
 		"cut short":     {good[:len(good)-10], "cut short"},
 		"index cut off": {good[:70], "middle of their index"},
 		"no pictures":   {none, "holds 0 pictures"},
-		"out of order":  {backwards, "not in time order"},
+		"out of order":  {backwards, "picture 1 is not later in the video than picture 0"},
+		"later on":      {laterBackwards, "picture 2 is not later in the video than picture 1"},
 	} {
 		if _, err := bif.Read(bytes.NewReader(c.raw), int64(len(c.raw))); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: read gave %v, want an error saying %q", name, err, c.want)
+		}
+	}
+}
+
+// Reading every picture finds one that cannot be shown, one with nothing in it, and one of another size, which reading the start of the file does not.
+func TestEveryPicture(t *testing.T) {
+	t.Parallel()
+
+	write := func(pics ...[]byte) []byte {
+		var b bytes.Buffer
+		if err := bif.Write(&b, 10*time.Second, pics); err != nil {
+			t.Fatal(err)
+		}
+
+		return b.Bytes()
+	}
+	good, cut := picture(t, 16, 16, 1), picture(t, 16, 16, 2)
+
+	// the second picture's entry is moved on to where the third starts, so the second holds nothing
+	empty := write(good, good, good)
+	binary.LittleEndian.PutUint32(empty[64+8+4:], binary.LittleEndian.Uint32(empty[64+16+4:]))
+
+	fine := write(good, good, good)
+	if err := bif.Pictures(bytes.NewReader(fine), int64(len(fine))); err != nil {
+		t.Errorf("a good BIF gave %v", err)
+	}
+	for name, c := range map[string]struct {
+		raw  []byte
+		want string
+	}{
+		"cut short":    {write(good, cut[:len(cut)/2], good), "picture 1 cannot be shown"},
+		"empty":        {empty, "picture 1 is empty"},
+		"another size": {write(good, good, picture(t, 32, 16, 3)), "picture 2 is 32x16, where the first is 16x16"},
+		"not a BIF":    {good, "does not start as one does"},
+	} {
+		if _, err := bif.Read(bytes.NewReader(c.raw), int64(len(c.raw))); err != nil && name != "not a BIF" {
+			t.Errorf("%s: reading the start gave %v, want it read as it is not looked at", name, err)
+		}
+		if err := bif.Pictures(bytes.NewReader(c.raw), int64(len(c.raw))); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: reading every picture gave %v, want an error saying %q", name, err, c.want)
 		}
 	}
 }

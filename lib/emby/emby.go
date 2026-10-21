@@ -75,7 +75,7 @@ type Library struct {
 
 // DB is Emby's database, open read-only.
 type DB struct {
-	db *sql.DB
+	db *readonly.DB
 }
 
 // Open opens Emby's database, library.db in its data folder, without being able to write to it.
@@ -135,7 +135,7 @@ func (d *DB) Libraries(ctx context.Context) ([]Library, error) {
 
 	// asked from the libraries' own items, of which there are a dozen, since the settings sit among every video's intro fingerprints: hundreds of
 	// megabytes to read through over a share
-	if err := readonly.Rows(ctx, d.db, func() { libs = nil }, each, `SELECT m.Name, e.Value FROM MediaItems m
+	if err := d.db.Rows(ctx, func() { libs = nil }, each, `SELECT m.Name, e.Value FROM MediaItems m
 JOIN ItemExtradata e ON e.ItemId = m.Id AND e.ExtradataTypeId = (SELECT ExtradataTypeId FROM ItemExtradataTypes WHERE Name = 'LibraryOptions')
 WHERE m.type = ?`, libraryType); err != nil {
 		return nil, fmt.Errorf("reading Emby's libraries: %w", err)
@@ -170,7 +170,7 @@ func (d *DB) Items(ctx context.Context, libs []Library) ([]Item, error) {
 
 		return nil
 	}
-	if err := readonly.Rows(ctx, d.db, func() { kindOf = map[int64]Kind{} }, kind, "SELECT Id, type FROM MediaItems WHERE type IN (?"+strings.Repeat(", ?", len(args)-1)+")", args...); err != nil {
+	if err := d.db.Rows(ctx, func() { kindOf = map[int64]Kind{} }, kind, "SELECT Id, type FROM MediaItems WHERE type IN (?"+strings.Repeat(", ?", len(args)-1)+")", args...); err != nil {
 		return nil, fmt.Errorf("reading Emby's items: %w", err)
 	}
 
@@ -189,7 +189,7 @@ func (d *DB) Items(ctx context.Context, libs []Library) ([]Item, error) {
 
 		return nil
 	}
-	if err := readonly.Rows(ctx, d.db, func() { items = make([]Item, 0, len(kindOf)) }, path, "SELECT Id, Path FROM MediaItems WHERE Path IS NOT NULL"); err != nil {
+	if err := d.db.Rows(ctx, func() { items = make([]Item, 0, len(kindOf)) }, path, "SELECT Id, Path FROM MediaItems WHERE Path IS NOT NULL"); err != nil {
 		return nil, fmt.Errorf("reading Emby's items' paths: %w", err)
 	}
 
@@ -220,7 +220,7 @@ func (d *DB) ByPath(ctx context.Context, libs []Library, path string) (Item, boo
 	}
 
 	// Emby's index of paths ignores case, so it is asked that way and the answer held to the exact path
-	err := readonly.Rows(ctx, d.db, func() { found, ok = Item{}, false }, each, "SELECT Id, type, Path FROM MediaItems WHERE Path = ? COLLATE NOCASE", path)
+	err := d.db.Rows(ctx, func() { found, ok = Item{}, false }, each, "SELECT Id, type, Path FROM MediaItems WHERE Path = ? COLLATE NOCASE", path)
 
 	return found, ok, err
 }
@@ -228,7 +228,7 @@ func (d *DB) ByPath(ctx context.Context, libs []Library, path string) (Item, boo
 // Size is the picture size Emby read from a video, 0 by 0 when it has none.
 func (d *DB) Size(ctx context.Context, id int64) (width, height int, err error) {
 	var w, h sql.NullInt64
-	err = readonly.Retry(ctx, func() error {
+	err = d.db.Retry(ctx, func() error {
 		return d.db.QueryRowContext(ctx, "SELECT Width, Height FROM MediaItems WHERE Id = ?", id).Scan(&w, &h)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -236,6 +236,40 @@ func (d *DB) Size(ctx context.Context, id int64) (width, height int, err error) 
 	}
 
 	return int(w.Int64), int(h.Int64), err
+}
+
+// lengthsAtOnce is how many videos' lengths are asked for in one question of Emby's database.
+const lengthsAtOnce = 500
+
+// Lengths is how long Emby read each of these videos to be, by ID. A video Emby has no length for is left out.
+//
+// They are asked for a few hundred at a time by ID, which the database finds straight away, as no index of its holds the lengths themselves.
+func (d *DB) Lengths(ctx context.Context, ids []int64) (map[int64]time.Duration, error) {
+	lengths := make(map[int64]time.Duration, len(ids))
+	for batch := range slices.Chunk(ids, lengthsAtOnce) {
+		args := make([]any, 0, len(batch))
+		for _, id := range batch {
+			args = append(args, id)
+		}
+
+		got := map[int64]time.Duration{}
+		each := func(rows *sql.Rows) error {
+			var id, ticks int64
+			if err := rows.Scan(&id, &ticks); err != nil {
+				return err
+			}
+			// Emby counts in ticks of a ten-millionth of a second
+			got[id] = time.Duration(ticks) * 100
+
+			return nil
+		}
+		if err := d.db.Rows(ctx, func() { clear(got) }, each, "SELECT Id, RunTimeTicks FROM MediaItems WHERE RunTimeTicks > 0 AND Id IN (?"+strings.Repeat(", ?", len(args)-1)+")", args...); err != nil {
+			return nil, fmt.Errorf("reading how long Emby's videos are: %w", err)
+		}
+		maps.Copy(lengths, got)
+	}
+
+	return lengths, nil
 }
 
 // LibraryOf is the name of the library whose folder holds the path, the one deepest in when folders nest, or "" for none.

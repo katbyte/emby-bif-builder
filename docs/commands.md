@@ -12,14 +12,23 @@ Counts, library by library:
 |---|---|
 | films, shows, episodes, extras | what Emby has in the library |
 | with a BIF, without | the videos with one or more BIFs beside them, and those with none |
-| not found | the videos Emby has whose file is not there |
+| not found | the videos Emby has whose file is not there: [`show not-found`](#show-not-found) lists them |
 | Jellyfin has | the videos Jellyfin has made thumbnails of |
 | to copy | the videos with no BIF that Jellyfin has thumbnails of: what `copy` would make |
 | to upgrade | the videos whose BIF is narrower than Jellyfin's thumbnails, cannot be read, or holds less than half as many pictures: what `copy --upgrade` would replace |
 
-Then the BIFs: how wide their pictures are, how they are named, who made them (Emby, or `ebb` from Jellyfin or from the video), how many cannot be read or hold a single picture, how many videos have more than one, and how many are [strays](#strays). Then Jellyfin's thumbnails: how many videos have them, how wide, and how many are of videos Emby does not have.
+Then the BIFs: how wide their pictures are, how they are named, who made them (Emby, or `ebb` from Jellyfin or from the video), how many cannot be read or hold a single picture, how many videos have more than one, and how many are [strays](#strays). [`verify`](#verify) lists the ones that are wrong. Then Jellyfin's thumbnails: how many videos have them, how wide, and how many are of videos Emby does not have.
 
 Extras are counted in their column and left out of the rest unless `--extras` is given.
+
+## show not-found
+
+Lists each video Emby has whose file is not where Emby has it, a line each, with why:
+
+- **its folder is there, the file is not**: most often a video renamed or removed since Emby last read the library.
+- **its folder is gone too**, or **its folder cannot be read**, with what stopped it.
+
+Each line also says what Emby has the video as, and which library. Then how many, library by library. These are what `stats` counts as not found, and what `copy` and `build` leave alone; once Emby reads the library again, it drops them or finds them where they went. Nothing is written.
 
 ## copy
 
@@ -63,6 +72,27 @@ Takes any number of things, each one of:
 
 For each it says what video it is and what that video has: where it is found, what Emby takes it for and which library holds it, each BIF beside it and what it holds, Jellyfin's item and thumbnails and how many of their sheets are there, and what `copy` and `copy --upgrade` would do for it.
 
+## verify
+
+Reads every BIF beside the videos and lists each that is wrong, with what is wrong with it:
+
+| Listed as | The BIF |
+|---|---|
+| broken | cannot be read: it is not a BIF, it was cut short, its index is out of order, or its first picture cannot be shown |
+| short | holds pictures that stop well before the video does: a single picture for an hour of video, say |
+| long | holds pictures that run well past the video's end, as a BIF of another cut of the video would |
+| unopened | is listed but cannot be opened from here: see below. It is not counted as wrong, as nothing is known of it |
+
+How long each video is comes from Emby's database, and a line says how long Emby has the video as, since that can be what is wrong. A BIF may fall short of its video, or run past it, by a tenth of the video and a picture or two before it is wrong, as the last picture falls either side of the end and the length Emby read can be a little out. A single picture of a clip under twenty seconds is fine. A BIF of a video Emby has no length for is only checked for whether it can be read, and the totals say how many there were.
+
+Each line says whether `copy --upgrade` or `build --upgrade` replaces the BIF. A line that says neither is one no run of `ebb` replaces: a BIF already as wide as Jellyfin's thumbnails or as the video, say.
+
+Reading a BIF reads its start: the header, the index of where each picture is, and the first picture. `--pictures` reads the whole of each and every picture in it, which finds a picture past the first that cannot be shown, holds nothing, or is a size other than the first. That is all of every BIF over the share, so it takes a good deal longer.
+
+Nothing is written. The run ends badly when any BIF is wrong.
+
+A Mac over a share lists a file whose name has its accents kept as separate characters, as some downloaded videos' are, but cannot open it. Such a video's BIFs are listed as unopened, `stats` counts them apart from those that cannot be read, and `copy` and `build` leave the video, as a BIF written from the Mac would be named so Emby does not find it. Run `ebb` where the files are for those.
+
 ## strays
 
 Lists each BIF none of whose names could be a video's beside it: one left when its video was renamed or removed, whoever made it. Also each half-written BIF a stopped run of `ebb` left behind, once it is an hour old, so one a run is writing now is never taken for one.
@@ -74,7 +104,7 @@ A video is beside a BIF when a file of a video's kind has the name the BIF is na
 ## What every run that writes does
 
 - **It is safe to stop.** An interrupt stops it between BIFs. A BIF being written is under a hidden name, `.<name>.<random>.ebb-tmp`, and is removed.
-- **It says what it did.** A line for each BIF made, upgraded or cut again, and for each removed, then the totals, with why the rest were left. `--verbose` adds a line for each video left and why.
+- **It says what it is doing.** Each video is said as it starts: which of how many it is, what is being done and why, what its BIF is made from (Jellyfin's set of thumbnails and how many sheets, or the video and how ffmpeg is taking its pictures) and the BIF it is written to. Once made, a line says what the BIF holds, how long it took and about how long the rest will take, and a line for each old BIF removed. Then the totals, with why the rest were left. `--verbose` adds a line for each video left and why.
 - **A failure stops nothing else.** It is said, counted, and the run ends badly once the rest are done.
 - **It keeps a record.** A line for every BIF written, replaced or removed, with tabs between when, what, the file and why, added to `--record`. The record is only ever added to.
 - **It tries before doing.** `--dry-run` says what would be done and does nothing. `--limit` stops after so many videos.

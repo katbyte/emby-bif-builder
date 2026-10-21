@@ -68,9 +68,9 @@ func runStrays(cmd *cobra.Command, f *FlagData, remove bool) error {
 	}
 	if !remove {
 		for _, st := range inv.Strays {
-			cout.Printf("stray     %s: %s, %s\n", st.Path, st.Why, size(st.Bytes))
+			cout.Printf("%s %s: %s, %s\n", paint(todo, "stray    "), st.Path, st.Why, size(st.Bytes))
 		}
-		cout.Quietf("%s, %s; --remove removes them\n", plural(len(inv.Strays), "stray", "strays"), size(bytes))
+		cout.Quietf("%s, %s; %s\n", counted(len(inv.Strays), "stray", "strays", todo), size(bytes), paint(quiet, "--remove removes them"))
 
 		return nil
 	}
@@ -98,25 +98,25 @@ func runStrays(cmd *cobra.Command, f *FlagData, remove bool) error {
 		}
 		for _, st := range strays {
 			if !still[st.Path] {
-				cout.Verbosef("<gray>left</>      %s: no longer a stray\n", st.Path)
+				cout.Verbosef("%s %s: %s\n", paint(quiet, "left     "), st.Path, paint(quiet, "no longer a stray"))
 
 				continue
 			}
 			if err := place.Remove(st.Path, rec, "stray: "+st.Why); err != nil {
 				failed++
-				cout.Errorf("<red>failed</>    %s: %v\n", st.Path, err)
+				cout.Errorf("%s %s: %s\n", paint(bad, "failed   "), st.Path, paint(bad, err.Error()))
 
 				continue
 			}
 			removed++
 			freed += st.Bytes
-			cout.Quietf("<yellow>removed</>   %s\n", st.Path)
+			cout.Quietf("%s %s\n", paint(good, "removed  "), st.Path)
 		}
 	}
 
-	line := fmt.Sprintf("removed %s, %s", plural(removed, "stray", "strays"), size(freed))
+	line := fmt.Sprintf("removed %s, %s", counted(removed, "stray", "strays", good), size(freed))
 	if rec != nil {
-		line += "; every change is recorded in " + rec.Path
+		line += paint(quiet, "; every change is recorded in "+rec.Path)
 	}
 	cout.Quietf("%s\n", line)
 	if failed > 0 {

@@ -3,7 +3,9 @@ package inventory
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -56,6 +58,8 @@ type Video struct {
 	Local string
 	Found bool
 	Err   error
+	// Unreachable is a video that is there but cannot be opened from here, nor its BIFs: see ErrUnreachable.
+	Unreachable bool
 	// BIFs is every BIF beside it.
 	BIFs []BIF
 	// Jellyfin is the video as Jellyfin has it, when Jellyfin has made thumbnails of it.
@@ -87,6 +91,10 @@ type Stray struct {
 	Why string
 }
 
+// ErrUnreachable is why a video or BIF its folder lists cannot be opened from here. A Mac cannot open a file on a share whose name has its accents
+// kept as separate characters, as some of Emby's are, nor write one so named; ebb run where the files are reaches them.
+var ErrUnreachable = errors.New("it is listed but cannot be opened from here, as a Mac cannot open a name on a share whose accents are kept as separate characters: run ebb where the files are")
+
 // leftover is how long a half-written BIF must have been left before it is taken to be one a stopped run left, and not one a run is writing now.
 const leftover = time.Hour
 
@@ -109,8 +117,28 @@ type Options struct {
 	Libraries []string
 	// Workers is how many folders are read at once.
 	Workers int
-	// Progress is told how many of the folders have been read, after each one.
-	Progress func(done, total int)
+	// Progress is told how far each step has got, as it starts, as each folder is read, and as it ends.
+	Progress func(Event)
+}
+
+// Step is one step of taking stock.
+type Step int
+
+const (
+	// EmbyVideos is reading Emby's libraries and videos from its database.
+	EmbyVideos Step = iota + 1
+	// JellyfinThumbnails is reading what Jellyfin has made thumbnails of from its database.
+	JellyfinThumbnails
+	// Folders is reading each folder the videos are in.
+	Folders
+)
+
+// Event is how far a step has got: Done of Total, Total 0 while it is not known. Ended is the step's last, when Done is how many it found.
+type Event struct {
+	Step  Step
+	Done  int
+	Total int
+	Ended bool
 }
 
 // Inventory is what Emby's videos have.
@@ -129,6 +157,13 @@ type Inventory struct {
 
 // Take reads what Emby has, what Jellyfin has, and every folder Emby's videos are in.
 func Take(ctx context.Context, o Options) (*Inventory, error) {
+	tell := func(e Event) {
+		if o.Progress != nil {
+			o.Progress(e)
+		}
+	}
+
+	tell(Event{Step: EmbyVideos})
 	libs, err := o.Emby.Libraries(ctx)
 	if err != nil {
 		return nil, err
@@ -143,11 +178,21 @@ func Take(ctx context.Context, o Options) (*Inventory, error) {
 		return nil, err
 	}
 
+	var videos int
+	for _, it := range items {
+		if it.Library != "" && it.Kind != emby.Show {
+			videos++
+		}
+	}
+	tell(Event{Step: EmbyVideos, Done: videos, Total: videos, Ended: true})
+
 	var thumbs map[string]jellyfin.Video
 	if o.Jellyfin != nil {
+		tell(Event{Step: JellyfinThumbnails})
 		if thumbs, err = o.Jellyfin.Thumbnails(ctx); err != nil {
 			return nil, fmt.Errorf("reading Jellyfin's thumbnails: %w", err)
 		}
+		tell(Event{Step: JellyfinThumbnails, Done: len(thumbs), Total: len(thumbs), Ended: true})
 	}
 
 	inv := &Inventory{Libraries: libs}
@@ -223,15 +268,20 @@ func look(ctx context.Context, videos []*Video, o Options) ([]Stray, error) {
 		mu     sync.Mutex
 		strays []Stray
 	)
+	tell := func(e Event) {
+		if o.Progress != nil {
+			o.Progress(e)
+		}
+	}
+
+	tell(Event{Step: Folders, Total: len(folders), Ended: len(folders) == 0})
 	err := parallel.Each(ctx, len(folders), max(o.Workers, 1), func(ctx context.Context, i int) error {
 		found := Folder(ctx, folders[i], byFolder[folders[i]])
 
-		n := done.Add(1)
+		n := int(done.Add(1))
 		mu.Lock()
 		strays = append(strays, found...)
-		if o.Progress != nil {
-			o.Progress(int(n), len(folders))
-		}
+		tell(Event{Step: Folders, Done: n, Total: len(folders), Ended: n == len(folders)})
 		mu.Unlock()
 
 		return ctx.Err()
@@ -257,6 +307,11 @@ var sized = regexp.MustCompile(`^(.*)-(\d+)-(\d+)$`)
 
 // Folder reads one folder for whether each of these videos in it is there, and the BIFs beside each, and returns the strays in it.
 func Folder(ctx context.Context, dir string, videos []*Video) []Stray {
+	return readFolder(ctx, dir, videos, os.Open)
+}
+
+// readFolder is Folder, opening a video to see whether it can be with open.
+func readFolder(ctx context.Context, dir string, videos []*Video, open func(string) (*os.File, error)) []Stray {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		for _, v := range videos {
@@ -280,6 +335,7 @@ func Folder(ctx context.Context, dir string, videos []*Video) []Stray {
 	}
 	for _, v := range videos {
 		v.Found = names[norm.NFC.String(filepath.Base(v.Local))]
+		v.Unreachable = v.Found && unreachable(v.Local, open)
 	}
 
 	for _, e := range entries {
@@ -304,13 +360,33 @@ func Folder(ctx context.Context, dir string, videos []*Video) []Stray {
 			continue
 		}
 
-		Read(&b)
+		if slices.ContainsFunc(owners, func(v *Video) bool { return v.Unreachable }) {
+			b.Err = ErrUnreachable
+		} else {
+			Read(&b)
+		}
 		for _, v := range owners {
 			v.BIFs = append(v.BIFs, b)
 		}
 	}
 
 	return strays(dir, entries, videos)
+}
+
+// unreachable says whether a video its folder lists cannot be opened from here. Only a name with its accents kept apart is tried, as trying is a
+// question of the share, and only that kind of name is known to fail.
+func unreachable(path string, open func(string) (*os.File, error)) bool {
+	if norm.NFC.IsNormalString(path) {
+		return false
+	}
+
+	f, err := open(path)
+	if err != nil {
+		return errors.Is(err, fs.ErrNotExist)
+	}
+	_ = f.Close()
+
+	return false
 }
 
 // strays is the files in a folder that nothing needs: each BIF none of whose names could be a video's beside it, and each half-written BIF a run
@@ -382,6 +458,25 @@ func Read(b *BIF) {
 	}
 	b.Bytes, b.Changed = fi.Size(), fi.ModTime()
 	b.Info, b.Err = bif.Read(f, fi.Size())
+}
+
+// ReadPictures reads every picture of the BIF, where Read reads only its start, and marks it as not readable when one of them cannot be shown.
+func ReadPictures(b *BIF) {
+	f, err := os.Open(b.Path)
+	if err != nil {
+		b.Err = err
+
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	fi, err := f.Stat()
+	if err != nil {
+		b.Err = err
+
+		return
+	}
+	b.Err = bif.Pictures(f, fi.Size())
 }
 
 // Stems is the names of the videos a BIF could be beside, from its name less .bif: the front of a sized name first, then the whole name, as a bare

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // Record is a list of every BIF ebb wrote, replaced or removed, a line each: when, what was done, the file, and why. It is only ever added to.
@@ -111,8 +113,12 @@ func Put(target string, data []byte, overwrite bool, replace []string, rec *Reco
 	}
 
 	for _, old := range replace {
-		if err := os.Remove(old); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		removed, err := removeFile(old, os.Remove)
+		if err != nil {
 			return changes, fmt.Errorf("removing %s, which %s replaces: both are there now: %w", old, filepath.Base(target), err)
+		}
+		if !removed {
+			continue
 		}
 
 		changes = append(changes, Change{What: "removed", Path: old})
@@ -126,15 +132,41 @@ func Put(target string, data []byte, overwrite bool, replace []string, rec *Reco
 
 // Remove removes a file nothing needs and adds its removal to the record. A file already gone is no error, and nothing is recorded for it.
 func Remove(path string, rec *Record, why string) error {
-	if err := os.Remove(path); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
-
+	removed, err := removeFile(path, os.Remove)
+	if err != nil || !removed {
 		return err
 	}
 
 	return rec.add("removed", path, why)
+}
+
+// removeFile removes the file with rm, and says whether it did: false for a file already gone. A share can say a file is not there that its folder
+// still lists, as a Mac's does for a name whose accents are kept as separate characters, so such a file is looked for before it is taken to be gone.
+func removeFile(path string, rm func(string) error) (bool, error) {
+	err := rm(path)
+	switch {
+	case err == nil:
+		return true, nil
+	case !errors.Is(err, fs.ErrNotExist):
+		return false, err
+	}
+
+	// a folder that is gone took the file with it
+	entries, err := os.ReadDir(filepath.Dir(path))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("the share says %s is not there, and its folder cannot be read to see: %w", filepath.Base(path), err)
+	}
+	name := norm.NFC.String(filepath.Base(path))
+	for _, e := range entries {
+		if norm.NFC.String(e.Name()) == name {
+			return false, fmt.Errorf("the share says %s is not there, but its folder lists it, so it could not be removed", filepath.Base(path))
+		}
+	}
+
+	return false, nil
 }
 
 // write writes the data beside target under a hidden name of its own, and returns that name once all of it is written.

@@ -87,7 +87,7 @@ func runCopy(cmd *cobra.Command, f *FlagData, upgrade, dry bool, limit int) erro
 			steps = append(steps, plan.Copy(v, plan.CopyOptions{Naming: naming, Upgrade: upgrade, Changed: s.changed}))
 		}
 	}
-	cout.Verbosef("%s of the videos have Jellyfin thumbnails\n", number(len(steps)))
+	cout.Verbosef("%s\n", paint(quiet, number(len(steps))+" of the videos have Jellyfin thumbnails"))
 
 	rec, err := f.record(dry)
 	if err != nil {
@@ -95,13 +95,18 @@ func runCopy(cmd *cobra.Command, f *FlagData, upgrade, dry bool, limit int) erro
 	}
 	defer func() { _ = rec.Close() }()
 
-	t := carryOut(ctx, steps, f.Workers, limit, dry, s.cut, rec)
+	t := carryOut(ctx, steps, f.Workers, limit, dry, job{write: s.cut, from: s.cutFrom}, rec)
 	t.say(dry, rec)
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("stopped: %w", err)
 	}
 
 	return t.err()
+}
+
+// cutFrom is the set of Jellyfin's thumbnails a step's BIF is cut from, as the line that starts it says.
+func (s *sources) cutFrom(step plan.Step) string {
+	return fmt.Sprintf("%s, %s on %s", step.From.Folder(s.trickplay), plural(step.From.Count, "thumbnail", "thumbnails"), plural(step.From.Sheets(), "sheet", "sheets"))
 }
 
 // cut makes a step's BIF from Jellyfin's thumbnails, with a note in its first picture saying which set it was cut from and when that was made.

@@ -97,6 +97,17 @@ func TestVideosThatAreNotThere(t *testing.T) {
 		t.Errorf("a video whose folder cannot be read: %s %q", s.Action, s.Why)
 	}
 
+	// a video out of reach is left by both, even with --upgrade and a BIF beside it that could not be read for being out of reach too
+	far := episode(true, inventory.BIF{Path: "/v/tv/S/S - 01x07-320-10.bif", Err: inventory.ErrUnreachable})
+	far.Unreachable = true
+	if s := plan.Copy(far, plan.CopyOptions{Upgrade: true, Changed: changed}); s.Action != plan.Leave || s.Reason != plan.Unreachable || !strings.Contains(s.Why, "cannot be opened from here") {
+		t.Errorf("copying a video out of reach: %s (%s) %q", s.Action, s.Reason, s.Why)
+	}
+	far.Jellyfin = nil
+	if s := plan.Build(far, plan.BuildOptions{Upgrade: true, Width: 640, Interval: 10 * time.Second}); s.Action != plan.Leave || s.Reason != plan.Unreachable {
+		t.Errorf("building a video out of reach: %s (%s) %q", s.Action, s.Reason, s.Why)
+	}
+
 	// when Jellyfin's sheets cannot be looked at, ebb's own BIF is left
 	ours := episode(true, a("S - 01x07-320-10.bif", 640, 241, plan.CopyNote(sheets, written)))
 	s := plan.Copy(ours, plan.CopyOptions{Changed: func(trickplay.Info) (time.Time, error) { return time.Time{}, errors.New("gone") }})
@@ -163,7 +174,7 @@ func TestNames(t *testing.T) {
 func TestWhoMadeIt(t *testing.T) {
 	t.Parallel()
 
-	for note, want := range map[string]string{plan.CopyNote(sheets, written): "ebb, from Jellyfin", plan.BuildNote(640, true): "ebb, from the video", "": "not ebb"} {
+	for note, want := range map[string]string{plan.CopyNote(sheets, written): "ebb, from Jellyfin", plan.BuildNote(640, true): "ebb, from the video", "": "Emby or another program"} {
 		if got := plan.Maker(note); got != want {
 			t.Errorf("%q was made by %q, want %q", note, got, want)
 		}

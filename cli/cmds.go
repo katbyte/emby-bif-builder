@@ -41,7 +41,7 @@ Complete documentation is available at https://github.com/katbyte/emby-bif-build
 		},
 	})
 
-	root.AddCommand(statsCmd(), copyCmd(), buildCmd(), lookupCmd(), straysCmd())
+	root.AddCommand(statsCmd(), showCmd(), copyCmd(), buildCmd(), lookupCmd(), verifyCmd(), straysCmd())
 
 	if err := configureFlags(root); err != nil {
 		return nil, fmt.Errorf("unable to configure flags: %w", err)

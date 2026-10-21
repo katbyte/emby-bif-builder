@@ -56,7 +56,7 @@ const (
 )
 
 const embySchema = `
-CREATE TABLE MediaItems (Id INTEGER PRIMARY KEY AUTOINCREMENT, type INT NOT NULL, Name TEXT, Path TEXT NULL, Width INT, Height INT);
+CREATE TABLE MediaItems (Id INTEGER PRIMARY KEY AUTOINCREMENT, type INT NOT NULL, Name TEXT, Path TEXT NULL, Width INT, Height INT, RunTimeTicks BIGINT);
 CREATE INDEX idx_MediaItems35 ON MediaItems(Path COLLATE NOCASE) WHERE Path NOT NULL;
 CREATE INDEX idx_MediaItems33b ON MediaItems(type);
 CREATE TABLE ItemExtradataTypes (ExtradataTypeId INTEGER PRIMARY KEY AUTOINCREMENT, Name TEXT);
@@ -199,6 +199,13 @@ func (s *Servers) Show(path string) {
 
 	s.nextID++
 	s.exec(s.embyDB(), "INSERT INTO MediaItems (Id, type, Name, Path) VALUES (?, ?, ?, ?)", s.nextID, typeShow, filepath.Base(path), ServerRoot+"/"+path)
+}
+
+// Length sets how long Emby read the video at path, as the servers see it, to be.
+func (s *Servers) Length(path string, length time.Duration) {
+	s.t.Helper()
+
+	s.exec(s.embyDB(), "UPDATE MediaItems SET RunTimeTicks = ? WHERE Path = ?", int64(length/100), path)
 }
 
 // video adds an item of this kind and writes a stand-in for its file.
