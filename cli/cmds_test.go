@@ -147,12 +147,12 @@ func (l *library) files(t *testing.T) []string {
 }
 
 // TestStatsCountsEachLibrary counts films, shows, episodes and extras, what has a BIF, and what copy would do, library by library.
-func TestStatsCountsEachLibrary(t *testing.T) {
+func TestScanCountsEachLibrary(t *testing.T) {
 	alone(t)
 	l := newLibrary(t)
 	set(t, l.Servers)
 
-	out, _, err := run(t, "stats")
+	out, _, err := run(t, "scan")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,9 +205,8 @@ func TestADryRunChangesNothing(t *testing.T) {
 	}
 	// each says which of how many it is, what it would do and why, what its BIF would be cut from and where it would go
 	for _, want := range []string{
-		"[2/4] would make: no BIF\n      from      " + l.freshThumbnails.Folder(l.Trickplay) + ", 23 thumbnails on 1 sheet\n      to        " + l.bif(l.fresh, "Show - 01x01 - Fresh-320-10.bif") + "\n",
-		"would upgrade: its BIF is 32 wide, Jellyfin's thumbnails 64\n",
-		"to        " + l.bif(l.narrow, "Show - 01x02 - Narrow-320-10.bif") + "\n",
+		"[2/4] would make    Show - 01x01 - Fresh-320-10.bif: no BIF\n      in            " + filepath.Dir(l.Local(l.fresh)) + "\n      from          Jellyfin's 23 thumbnails on 1 sheet in " + l.freshThumbnails.Folder(l.Trickplay) + "\n",
+		"would upgrade Show - 01x02 - Narrow-320-10.bif: its BIF is 32 wide, Jellyfin's thumbnails 64\n",
 		"would make 2, would upgrade 2, would remake 0",
 	} {
 		if !strings.Contains(out, want) {
@@ -252,10 +251,11 @@ func TestCopyCutsJellyfinsThumbnails(t *testing.T) {
 	if !strings.Contains(out, "made 2, upgraded 0, remade 0, failed 0") {
 		t.Errorf("the totals are wrong:\n%s", out)
 	}
-	// each is said as it starts, with what it is cut from and where it goes, and again once it is made, with what it holds
+	// each is said as it starts, and again once it is made, with how many of how many are done, what it holds, its folder and what it was cut from
 	for _, want := range []string{
-		"] making: no BIF\n      from      " + l.freshThumbnails.Folder(l.Trickplay) + ", 23 thumbnails on 1 sheet\n      to        " + made + "\n",
-		"] made      " + made + ": 23 pictures, 64x36, ",
+		" making    Show - 01x01 - Fresh-320-10.bif: no BIF\n",
+		"] made      Show - 01x01 - Fresh-320-10.bif: 23 pictures, 64x36, ",
+		"      in        " + filepath.Dir(made) + "\n      from      Jellyfin's 23 thumbnails on 1 sheet in " + l.freshThumbnails.Folder(l.Trickplay) + "\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("copy does not say %q:\n%s", want, out)
@@ -354,7 +354,7 @@ func TestRemakeWhenJellyfinMadeItsThumbnailsAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "made 0, upgraded 0, remade 1, failed 0") || !strings.Contains(out, "remade    "+l.bif(l.fresh, "Show - 01x01 - Fresh-320-10.bif")) {
+	if !strings.Contains(out, "made 0, upgraded 0, remade 1, failed 0") || !strings.Contains(out, "] remade    Show - 01x01 - Fresh-320-10.bif: ") {
 		t.Errorf("the BIF was not cut again:\n%s", out)
 	}
 }
@@ -419,7 +419,7 @@ func TestWhatEachCommandNeeds(t *testing.T) {
 		t.Errorf("copy with nothing set gave %v, want the settings it needs named", err)
 	}
 
-	_, _, err = run(t, "stats", "--workers", "0")
+	_, _, err = run(t, "scan", "--workers", "0")
 	if err == nil || !strings.Contains(err.Error(), "--workers") {
 		t.Errorf("no workers gave %v", err)
 	}
@@ -465,29 +465,29 @@ func TestLookup(t *testing.T) {
 }
 
 // TestStrays lists the BIFs whose video is gone, and removes them with --remove, recording each, while a BIF whose video is there stays.
-func TestStrays(t *testing.T) {
+func TestScanAndCleanStrays(t *testing.T) {
 	alone(t)
 	l := newLibrary(t)
 	record := set(t, l.Servers)
 	stray := l.BIF(l.gone, "Show - 01x06 - Gone-320-10.bif", 32, 18, 23)
 
-	out, _, err := run(t, "strays")
+	out, _, err := run(t, "scan")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "stray     "+stray+": no video of its name beside it") || !strings.Contains(out, "1 stray, ") {
-		t.Errorf("strays does not list the gone video's BIF:\n%s", out)
+	if !strings.Contains(out, "stray     "+stray+": no video of its name beside it") || !strings.Contains(out, "  strays:    1, ") {
+		t.Errorf("scan does not list and count the gone video's BIF:\n%s", out)
+	}
+
+	out, _, err = run(t, "clean", "--dry-run")
+	if err != nil || !strings.Contains(out, "would remove "+stray+": ") || !strings.Contains(out, "would remove 1 stray, ") {
+		t.Errorf("clean --dry-run does not say it would remove the stray (%v):\n%s", err, out)
 	}
 	if _, err := os.Stat(stray); err != nil {
-		t.Error("listing the strays removed one")
+		t.Error("scanning, or a dry run of clean, removed a stray")
 	}
 
-	out, _, err = run(t, "stats")
-	if err != nil || !strings.Contains(out, "strays, beside no video of their name or half written: 1, ") {
-		t.Errorf("stats does not count the stray (%v):\n%s", err, out)
-	}
-
-	out, _, err = run(t, "strays", "--remove")
+	out, _, err = run(t, "clean")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,9 +504,9 @@ func TestStrays(t *testing.T) {
 }
 
 // TestVersion prints the program's name and version.
-// Verify lists each BIF that cannot be read, or whose pictures stop well before its video ends or run well past it, with the run that replaces it,
-// and changes nothing. Reading every picture finds a picture past the first that cannot be shown.
-func TestVerify(t *testing.T) {
+// scan lists each BIF that cannot be read, or whose pictures stop well before its video ends or run well past it, with the run that replaces it,
+// counts them, and changes nothing. Reading every picture finds a picture past the first that cannot be shown.
+func TestScanFindsWrongBIFs(t *testing.T) {
 	alone(t)
 	l := newLibrary(t)
 
@@ -528,23 +528,24 @@ func TestVerify(t *testing.T) {
 	set(t, l.Servers)
 	before := l.files(t)
 
-	out, _, err := run(t, "verify")
-	if err == nil || err.Error() != "3 BIFs are wrong" {
-		t.Errorf("verify ended with %v, want it to say 3 BIFs are wrong", err)
+	out, _, err := run(t, "scan")
+	if err != nil {
+		t.Fatal(err)
 	}
 	for _, want := range []string{
 		"broken    " + narrow + ": cut short: its pictures run to byte ",
 		"short     " + built + ": its 1 picture covers 10s, where Emby has the video as 3m 50s long; build --upgrade replaces it\n",
 		"long      " + wide + ": its 23 pictures cover 3m 50s, where Emby has the video as 1m 00s long\n",
-		"read 5 BIFs: 1 broken, 1 short, 1 long; copy --upgrade replaces 1; build --upgrade replaces 1\n",
+		"  wrong:     1 broken, 1 short, 1 long; copy --upgrade replaces 1; build --upgrade replaces 1\n",
+		"             1 hold a single picture, 1 of them short for their video\n",
 		"Emby has no length for the videos of 2 BIFs, so those were only checked for whether they can be read\n",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("verify does not say %q:\n%s", want, out)
+			t.Errorf("scan does not say %q:\n%s", want, out)
 		}
 	}
 	if !strings.Contains(out, "; copy --upgrade replaces it\n") {
-		t.Errorf("verify does not say copy --upgrade replaces the broken BIF:\n%s", out)
+		t.Errorf("scan does not say copy --upgrade replaces the broken BIF:\n%s", out)
 	}
 
 	// the third picture of twice's bare BIF is spoilt where it starts, which reading the start of the file does not reach
@@ -558,25 +559,31 @@ func TestVerify(t *testing.T) {
 	if err := os.WriteFile(bare, raw, 0o600); err != nil { //nolint:gosec // the test's own file
 		t.Fatal(err)
 	}
-	if out, _, _ = run(t, "verify"); strings.Contains(out, bare) {
-		t.Errorf("verify without --pictures read past the first picture:\n%s", out)
+	if out, _, _ = run(t, "scan"); strings.Contains(out, bare) {
+		t.Errorf("scan without --pictures read past the first picture:\n%s", out)
 	}
 
-	out, _, err = run(t, "verify", "--pictures")
-	if err == nil || err.Error() != "4 BIFs are wrong" {
-		t.Errorf("verify --pictures ended with %v, want it to say 4 BIFs are wrong", err)
+	out, _, err = run(t, "scan", "--pictures")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(out, "broken    "+bare+": broken: picture 2 cannot be shown: ") {
-		t.Errorf("verify --pictures does not find the spoilt picture:\n%s", out)
+	if !strings.Contains(out, "broken    "+bare+": broken: picture 2 cannot be shown: ") || !strings.Contains(out, "  wrong:     2 broken, 1 short, 1 long") {
+		t.Errorf("scan --pictures does not find the spoilt picture:\n%s", out)
+	}
+
+	// --quiet keeps the counts and leaves out the lists
+	out, _, err = run(t, "scan", "--quiet")
+	if err != nil || strings.Contains(out, narrow) || !strings.Contains(out, "  wrong:     1 broken, 1 short, 1 long") {
+		t.Errorf("scan --quiet gave (%v):\n%s", err, out)
 	}
 
 	if after := l.files(t); !slices.Equal(before, after) {
-		t.Errorf("verify changed the files: before %q, after %q", before, after)
+		t.Errorf("scan changed the files: before %q, after %q", before, after)
 	}
 }
 
-// show not-found lists each video Emby has whose file is not there, whether its folder is there or gone too, and how many in each library.
-func TestShowNotFound(t *testing.T) {
+// scan lists each video Emby has whose file is not there, and whether its folder is there or gone too.
+func TestScanListsVideosNotFound(t *testing.T) {
 	alone(t)
 	l := newLibrary(t)
 	moved := l.Episode("tv/Moved (2001)/Moved - 01x01.mkv")
@@ -585,21 +592,20 @@ func TestShowNotFound(t *testing.T) {
 	}
 	set(t, l.Servers)
 
-	out, _, err := run(t, "show", "not-found")
+	out, _, err := run(t, "scan")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
 		"not found " + l.Local(l.gone) + ": its folder is there, the file is not; Emby has it as episode ",
 		"not found " + l.Local(moved) + ": its folder is gone too; Emby has it as episode ",
-		"2 videos not found: 2 in TV\n",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("show not-found does not say %q:\n%s", want, out)
+			t.Errorf("scan does not say %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, l.Local(l.fresh)) {
-		t.Errorf("show not-found lists a video that is there:\n%s", out)
+	if strings.Contains(out, "not found "+l.Local(l.fresh)) {
+		t.Errorf("scan lists a video that is there as not found:\n%s", out)
 	}
 }
 

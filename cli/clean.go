@@ -12,38 +12,39 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func straysCmd() *cobra.Command {
+func cleanCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "strays",
-		Short: "List the BIFs whose video is no longer beside them, and remove them with --remove",
-		Long: `Lists each BIF none of whose names could be a video's beside it: one left when its video was
-renamed or removed, Emby's own or ebb's. Also each half-written BIF a run of ebb that was
-stopped left behind, once it is an hour old.
+		Use:   "clean",
+		Short: "Remove the strays scan lists: BIFs beside no video of their name, and half-written ones",
+		Long: `Removes each BIF none of whose names could be a video's beside it: one left when its video
+was renamed or removed, Emby's own or ebb's. Also each half-written BIF a run of ebb that
+was stopped left behind, once it is an hour old. These are the strays scan lists.
 
 A video is beside a BIF when a file of a video's kind has the name the BIF is named from, or
 Emby has a video of that name there and it was found. Only the folders Emby's videos are in
 are read: a folder whose every video is gone, and that Emby no longer has, is not.
 
---remove removes them, reading each folder again first so a video that has come back since
-keeps its BIF, and adds each removal to the record (--record).`,
+Each folder is read again just before its strays are removed, so a video that has come
+back since keeps its BIF, and each removal is added to the record (--record). --dry-run
+says what would be removed and removes nothing.`,
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
 
-			remove, _ := cmd.Flags().GetBool("remove")
+			dry, _ := cmd.Flags().GetBool("dry-run")
 
-			return runStrays(cmd, GetFlags(), remove)
+			return runClean(cmd, GetFlags(), dry)
 		},
 	}
 
-	cmd.Flags().Bool("remove", false, "remove the strays found, adding each to the record")
+	cmd.Flags().BoolP("dry-run", "n", false, "say what would be removed, and remove nothing")
 
 	return cmd
 }
 
-// runStrays lists the strays, or removes them.
-func runStrays(cmd *cobra.Command, f *FlagData, remove bool) error {
+// runClean removes the strays, or says what it would remove.
+func runClean(cmd *cobra.Command, f *FlagData, dry bool) error {
 	if err := f.check(); err != nil {
 		return err
 	}
@@ -62,15 +63,13 @@ func runStrays(cmd *cobra.Command, f *FlagData, remove bool) error {
 		return err
 	}
 
-	var bytes int64
-	for _, st := range inv.Strays {
-		bytes += st.Bytes
-	}
-	if !remove {
+	if dry {
+		var bytes int64
 		for _, st := range inv.Strays {
-			cout.Printf("%s %s: %s, %s\n", paint(todo, "stray    "), st.Path, st.Why, size(st.Bytes))
+			bytes += st.Bytes
+			cout.Printf("%s %s: %s, %s\n", paint(todo, "would remove"), named(st.Path), st.Why, size(st.Bytes))
 		}
-		cout.Quietf("%s, %s; %s\n", counted(len(inv.Strays), "stray", "strays", todo), size(bytes), paint(quiet, "--remove removes them"))
+		cout.Quietf("would remove %s, %s\n", counted(len(inv.Strays), "stray", "strays", todo), size(bytes))
 
 		return nil
 	}
@@ -98,19 +97,19 @@ func runStrays(cmd *cobra.Command, f *FlagData, remove bool) error {
 		}
 		for _, st := range strays {
 			if !still[st.Path] {
-				cout.Verbosef("%s %s: %s\n", paint(quiet, "left     "), st.Path, paint(quiet, "no longer a stray"))
+				cout.Verbosef("%s %s: %s\n", paint(quiet, "left     "), named(st.Path), paint(quiet, "no longer a stray"))
 
 				continue
 			}
 			if err := place.Remove(st.Path, rec, "stray: "+st.Why); err != nil {
 				failed++
-				cout.Errorf("%s %s: %s\n", paint(bad, "failed   "), st.Path, paint(bad, err.Error()))
+				cout.Errorf("%s %s: %s\n", paint(bad, "failed   "), named(st.Path), paint(bad, err.Error()))
 
 				continue
 			}
 			removed++
 			freed += st.Bytes
-			cout.Quietf("%s %s\n", paint(good, "removed  "), st.Path)
+			cout.Quietf("%s %s\n", paint(good, "removed  "), named(st.Path))
 		}
 	}
 

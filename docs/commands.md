@@ -4,31 +4,55 @@ Every command reads Emby's libraries and videos from its database, then reads ea
 
 A BIF is any file beside a video named `<video>.bif` or `<video>-<width>-<seconds>.bif`, where `<video>` is the video's file name without its extension. What a BIF holds is read from the file itself, not its name: a `-320-10.bif` can hold pictures 640 wide.
 
-## stats
+## scan
 
-Counts, library by library:
+Reads everything once and says what it found: first each thing to look at, a line each, then the counts. Nothing is written.
+
+### What it lists
+
+| Listed as | What it is |
+|---|---|
+| broken | a BIF that cannot be read: it is not a BIF, it was cut short, its index is out of order, or its first picture cannot be shown |
+| short | a BIF whose pictures stop well before the video does: a single picture for an hour of video, say |
+| long | a BIF whose pictures run well past the video's end, as a BIF of another cut of the video would |
+| unopened | a BIF that is listed but cannot be opened from here: see below. Nothing is known of it, so it is not counted as wrong |
+| stray | a BIF none of whose names could be a video's beside it, or a half-written one a stopped run of `ebb` left: [`clean`](#clean) removes them |
+| not found | a video Emby has whose file is not there, with whether its folder is there, gone too, or cannot be read |
+
+How long each video is comes from Emby's database, and a short or long line says how long Emby has the video as, since that can be what is wrong. A BIF may fall short of its video, or run past it, by a tenth of the video and a picture or two before it is wrong, as the last picture falls either side of the end and the length Emby read can be a little out. A single picture of a clip under twenty seconds is fine. A BIF of a video Emby has no length for is only checked for whether it can be read, and the counts say how many there were.
+
+Each broken, short or long line says whether `copy --upgrade` or `build --upgrade` replaces the BIF. A line that says neither is one no run of `ebb` replaces: a BIF already as wide as Jellyfin's thumbnails or as the video, say.
+
+A stray is a BIF beside no video of its name: a video is beside it when a file of a video's kind has the name the BIF is named from, a folder does (a disc's), or Emby has a video of that name there and it was found. A video Emby has not got to yet keeps its BIF. A half-written BIF counts once it is an hour old, so one a run is writing now is never taken for one. Only the folders Emby's videos are in are read: a folder whose every video is gone, and that Emby no longer has, is not.
+
+A video not found is most often one renamed or removed since Emby last read the library; once Emby reads it again, it drops the video or finds it where it went. `copy` and `build` leave it alone.
+
+### The counts
+
+Library by library:
 
 | Column | What it counts |
 |---|---|
 | films, shows, episodes, extras | what Emby has in the library |
 | with a BIF, without | the videos with one or more BIFs beside them, and those with none |
-| not found | the videos Emby has whose file is not there: [`show not-found`](#show-not-found) lists them |
+| not found | the videos Emby has whose file is not there |
 | Jellyfin has | the videos Jellyfin has made thumbnails of |
 | to copy | the videos with no BIF that Jellyfin has thumbnails of: what `copy` would make |
 | to upgrade | the videos whose BIF is narrower than Jellyfin's thumbnails, cannot be read, or holds less than half as many pictures: what `copy --upgrade` would replace |
 
-Then the BIFs: how wide their pictures are, how they are named, who made them (Emby, or `ebb` from Jellyfin or from the video), how many cannot be read or hold a single picture, how many videos have more than one, and how many are [strays](#strays). [`verify`](#verify) lists the ones that are wrong. Then Jellyfin's thumbnails: how many videos have them, how wide, and how many are of videos Emby does not have.
+Then the BIFs: how wide their pictures are, how they are named, who made them (Emby, or `ebb` from Jellyfin or from the video), how many are broken, short or long and how many of those each run would replace, how many hold a single picture and how many of those are short for their video, how many cannot be opened from here, how many videos have more than one, and how many are strays. Then Jellyfin's thumbnails: how many videos have them, how wide, and how many are of videos Emby does not have.
 
 Extras are counted in their column and left out of the rest unless `--extras` is given.
 
-## show not-found
+### Reading every picture
 
-Lists each video Emby has whose file is not where Emby has it, a line each, with why:
+Reading a BIF reads its start: the header, the index of where each picture is, and the first picture. `--pictures` reads the whole of each and every picture in it, which finds a picture past the first that cannot be shown, holds nothing, or is a size other than the first. That is all of every BIF over the share, so it takes a good deal longer.
 
-- **its folder is there, the file is not**: most often a video renamed or removed since Emby last read the library.
-- **its folder is gone too**, or **its folder cannot be read**, with what stopped it.
+`--quiet` leaves out the lists and the lines on the way, and gives the counts alone.
 
-Each line also says what Emby has the video as, and which library. Then how many, library by library. These are what `stats` counts as not found, and what `copy` and `build` leave alone; once Emby reads the library again, it drops them or finds them where they went. Nothing is written.
+### From a Mac
+
+A Mac over a share lists a file whose name has its accents kept as separate characters, as some downloaded videos' are, but cannot open it. Such a video's BIFs are listed as unopened and counted apart from those that cannot be read, and `copy` and `build` leave the video, as a BIF written from the Mac would be named so Emby does not find it. Run `ebb` where the files are for those.
 
 ## copy
 
@@ -72,34 +96,11 @@ Takes any number of things, each one of:
 
 For each it says what video it is and what that video has: where it is found, what Emby takes it for and which library holds it, each BIF beside it and what it holds, Jellyfin's item and thumbnails and how many of their sheets are there, and what `copy` and `copy --upgrade` would do for it.
 
-## verify
+## clean
 
-Reads every BIF beside the videos and lists each that is wrong, with what is wrong with it:
+Removes the strays `scan` lists: each BIF none of whose names could be a video's beside it, left when its video was renamed or removed, whoever made it, and each half-written BIF a stopped run of `ebb` left, once it is an hour old.
 
-| Listed as | The BIF |
-|---|---|
-| broken | cannot be read: it is not a BIF, it was cut short, its index is out of order, or its first picture cannot be shown |
-| short | holds pictures that stop well before the video does: a single picture for an hour of video, say |
-| long | holds pictures that run well past the video's end, as a BIF of another cut of the video would |
-| unopened | is listed but cannot be opened from here: see below. It is not counted as wrong, as nothing is known of it |
-
-How long each video is comes from Emby's database, and a line says how long Emby has the video as, since that can be what is wrong. A BIF may fall short of its video, or run past it, by a tenth of the video and a picture or two before it is wrong, as the last picture falls either side of the end and the length Emby read can be a little out. A single picture of a clip under twenty seconds is fine. A BIF of a video Emby has no length for is only checked for whether it can be read, and the totals say how many there were.
-
-Each line says whether `copy --upgrade` or `build --upgrade` replaces the BIF. A line that says neither is one no run of `ebb` replaces: a BIF already as wide as Jellyfin's thumbnails or as the video, say.
-
-Reading a BIF reads its start: the header, the index of where each picture is, and the first picture. `--pictures` reads the whole of each and every picture in it, which finds a picture past the first that cannot be shown, holds nothing, or is a size other than the first. That is all of every BIF over the share, so it takes a good deal longer.
-
-Nothing is written. The run ends badly when any BIF is wrong.
-
-A Mac over a share lists a file whose name has its accents kept as separate characters, as some downloaded videos' are, but cannot open it. Such a video's BIFs are listed as unopened, `stats` counts them apart from those that cannot be read, and `copy` and `build` leave the video, as a BIF written from the Mac would be named so Emby does not find it. Run `ebb` where the files are for those.
-
-## strays
-
-Lists each BIF none of whose names could be a video's beside it: one left when its video was renamed or removed, whoever made it. Also each half-written BIF a stopped run of `ebb` left behind, once it is an hour old, so one a run is writing now is never taken for one.
-
-A video is beside a BIF when a file of a video's kind has the name the BIF is named from, a folder does (a disc's), or Emby has a video of that name there and it was found. A video Emby has not got to yet keeps its BIF. Only the folders Emby's videos are in are read: a folder whose every video is gone, and that Emby no longer has, is not.
-
-`--remove` removes them. Each folder is read again just before its strays are removed, and a BIF whose video has come back since stays. Each removal goes in the record.
+Each folder is read again just before its strays are removed, and a BIF whose video has come back since stays. Each removal goes in the record. `--dry-run` says what would be removed and removes nothing.
 
 ## What every run that writes does
 

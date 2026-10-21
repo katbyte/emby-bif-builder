@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"image/jpeg"
+	"path/filepath"
 	"time"
 
 	"github.com/katbyte/emby-bif-builder/lib/bif"
@@ -162,7 +163,7 @@ func (b builder) from(step plan.Step) string {
 		how += ", on " + b.o.HWAccel
 	}
 
-	return fmt.Sprintf("%s, a picture every %s with ffmpeg, %s", step.Video.Local, verify.Length(every), how)
+	return paint("bold", filepath.Base(step.Video.Local)) + paint(quiet, fmt.Sprintf(", a picture every %s with ffmpeg, %s", verify.Length(every), how))
 }
 
 // build makes a step's BIF from the video, with a note in its first picture saying it was built so. A BIF named for its width is named once the

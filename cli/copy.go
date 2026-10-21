@@ -106,7 +106,7 @@ func runCopy(cmd *cobra.Command, f *FlagData, upgrade, dry bool, limit int) erro
 
 // cutFrom is the set of Jellyfin's thumbnails a step's BIF is cut from, as the line that starts it says.
 func (s *sources) cutFrom(step plan.Step) string {
-	return fmt.Sprintf("%s, %s on %s", step.From.Folder(s.trickplay), plural(step.From.Count, "thumbnail", "thumbnails"), plural(step.From.Sheets(), "sheet", "sheets"))
+	return fmt.Sprintf("Jellyfin's %s on %s %s", plural(step.From.Count, "thumbnail", "thumbnails"), plural(step.From.Sheets(), "sheet", "sheets"), paint(quiet, "in "+step.From.Folder(s.trickplay)))
 }
 
 // cut makes a step's BIF from Jellyfin's thumbnails, with a note in its first picture saying which set it was cut from and when that was made.

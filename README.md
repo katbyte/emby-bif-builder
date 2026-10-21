@@ -39,15 +39,13 @@ JF_TRICKPLAY_PATH=/home/docker/config/jellyfin/data/trickplay
 Then:
 
 ```bash
-ebb stats                     # what has a BIF, what does not, and what Jellyfin has, library by library
-ebb show not-found            # the videos Emby has whose file is not there
+ebb scan                      # what is wrong or stray, then what has a BIF and what Jellyfin has, library by library
 ebb copy --dry-run            # what copy would do, doing nothing
 ebb copy                      # a BIF for every video Jellyfin has thumbnails of and that has none
 ebb copy --upgrade            # and replace Emby's 320-wide ones with Jellyfin's 640-wide thumbnails
 ebb build --keyframes         # a BIF from the video itself, for videos Jellyfin has not got to
 ebb lookup <video, BIF or Jellyfin item ID>   # what one video has, and what copy would do for it
-ebb verify                    # BIFs that cannot be read, or whose pictures stop well before their video ends
-ebb strays                    # BIFs left behind when their video was renamed or removed; --remove removes them
+ebb clean                     # remove the BIFs left behind when their video was renamed or removed
 ```
 
 `--limit 10` does no more than ten, for a first try. `--libraries TV` looks at one library alone.
@@ -56,13 +54,11 @@ ebb strays                    # BIFs left behind when their video was renamed or
 
 | Command | What it does |
 |---|---|
-| [`stats`](docs/commands.md#stats) | counts each library's films, shows, episodes and extras, those with a BIF and without, and what copy would do; then how wide the BIFs are, how they are named and who made them, and how wide Jellyfin's thumbnails are |
-| [`show not-found`](docs/commands.md#show-not-found) | lists the videos Emby has whose file is not there, and whether their folder is gone too |
+| [`scan`](docs/commands.md#scan) | reads everything once, lists each BIF that is broken, short or long for its video with the run that replaces it, each stray and each video not found, then counts each library's videos, those with a BIF and without and what copy would do, and how wide, how named and who made the BIFs; with `--pictures`, reads every picture too |
 | [`copy`](docs/commands.md#copy) | cuts a BIF from Jellyfin's thumbnail sheets for each video that has none; with `--upgrade`, also replaces BIFs narrower than Jellyfin's thumbnails, and removes the old ones |
 | [`build`](docs/commands.md#build) | builds a BIF from the video with ffmpeg, for videos Jellyfin has no thumbnails of |
 | [`lookup`](docs/commands.md#lookup) | says what a video, a BIF beside one, a Jellyfin item ID or a trickplay folder is, and what each server has for it |
-| [`verify`](docs/commands.md#verify) | lists the BIFs that cannot be read, or whose pictures stop well before their video ends or run well past it, and which run replaces each; with `--pictures`, reads every picture in them |
-| [`strays`](docs/commands.md#strays) | lists the BIFs whose video is no longer beside them, left when it was renamed or removed; with `--remove`, removes them |
+| [`clean`](docs/commands.md#clean) | removes the strays scan lists: BIFs whose video is no longer beside them, and half-written ones |
 
 Films and episodes get BIFs. Trailers, theme videos and the other extras only do with `--extras`.
 

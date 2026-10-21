@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -13,54 +12,8 @@ import (
 	"github.com/katbyte/emby-bif-builder/lib/emby"
 	"github.com/katbyte/emby-bif-builder/lib/inventory"
 	"github.com/katbyte/emby-bif-builder/lib/plan"
-	"github.com/spf13/cobra"
+	"github.com/katbyte/emby-bif-builder/lib/verify"
 )
-
-func statsCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "stats",
-		Short: "Count what has a BIF and what does not, library by library, and what Jellyfin has",
-		Long: `Counts each library's films, shows, episodes and extras; how many of its videos have a BIF
-beside them and how many do not; and how many of those Jellyfin has thumbnails of, which
-copy would make a BIF for, or would replace a narrower one with, given --upgrade.
-
-Then the BIFs themselves: how wide their pictures are, how they are named, who made them,
-and those that cannot be read or hold a single picture. Then Jellyfin's thumbnails: how many
-videos have them and how wide they are.
-
-Extras (trailers, theme videos and the like) are counted, but left out of the rest unless
---extras is given. It reads every folder Emby's videos are in, which over a share takes a
-few minutes, and changes nothing.`,
-		Args:          cobra.NoArgs,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cmd.SilenceUsage = true
-
-			f := GetFlags()
-			if err := f.check(); err != nil {
-				return err
-			}
-
-			ctx, stop := signals(cmd)
-			defer stop()
-
-			s, err := f.open(ctx, false)
-			if err != nil {
-				return err
-			}
-			defer s.close()
-
-			inv, err := f.take(ctx, s, cmd.ErrOrStderr())
-			if err != nil {
-				return err
-			}
-
-			writeStats(cmd.OutOrStdout(), f, s, inv)
-
-			return nil
-		},
-	}
-}
 
 // libraryCounts is one library's line of the table.
 type libraryCounts struct {
@@ -70,8 +23,10 @@ type libraryCounts struct {
 	gone                           int
 }
 
-// writeStats writes the counts.
-func writeStats(w io.Writer, f *FlagData, s *sources, inv *inventory.Inventory) {
+// writeStats writes the counts a scan ends with: the table of each library, then the BIFs, then Jellyfin's thumbnails.
+func writeStats(w io.Writer, f *FlagData, s *sources, inv *inventory.Inventory, found findings) {
+	lengths := found.lengths
+
 	byLib := map[string]*libraryCounts{}
 	for _, l := range inv.Libraries {
 		byLib[l.Name] = &libraryCounts{}
@@ -82,8 +37,9 @@ func writeStats(w io.Writer, f *FlagData, s *sources, inv *inventory.Inventory) 
 
 	var (
 		widths, names, makers = map[string]int{}, map[string]int{}, map[string]int{}
-		bifs, unreadable      int
-		unopened              int
+		bifs, unknown         int
+		wrong                 = map[verify.Kind]int{}
+		singleShort           int
 		single, several       int
 		jfWidths              = map[int]int{}
 		jfVideos, remakes     int
@@ -115,22 +71,26 @@ func writeStats(w io.Writer, f *FlagData, s *sources, inv *inventory.Inventory) 
 		if len(v.BIFs) > 1 {
 			several++
 		}
+		if len(v.BIFs) > 0 && lengths[v.ID] <= 0 {
+			unknown += len(v.BIFs)
+		}
 		for _, b := range v.BIFs {
 			names[nameOf(b)]++
-			if errors.Is(b.Err, inventory.ErrUnreachable) {
-				unopened++
-
-				continue
+			p, isWrong := verify.Check(b, lengths[v.ID])
+			if isWrong {
+				wrong[p.Kind]++
 			}
 			if b.Err != nil {
-				unreadable++
-
 				continue
 			}
+
 			widths[strconv.Itoa(b.Info.Width)]++
 			makers[plan.Maker(b.Info.Note)]++
 			if b.Info.Frames == 1 {
 				single++
+				if p.Kind == verify.Short {
+					singleShort++
+				}
 			}
 		}
 
@@ -181,9 +141,6 @@ func writeStats(w io.Writer, f *FlagData, s *sources, inv *inventory.Inventory) 
 		scope = "films, episodes and extras"
 	}
 	color.Fprintln(w, paint(quiet, "\nThe BIF and Jellyfin columns count "+scope+". To copy is what copy would make a BIF for; to upgrade, what copy --upgrade would replace."))
-	if total.gone > 0 {
-		color.Fprintln(w, paint(quiet, "ebb show not-found lists the videos not found."))
-	}
 	if remakes > 0 {
 		color.Fprintf(w, "Jellyfin has also made its thumbnails again for %s that ebb cut BIFs of, which copy cuts again.\n", counted(remakes, "video", "videos", todo))
 	}
@@ -200,16 +157,27 @@ func writeStats(w io.Writer, f *FlagData, s *sources, inv *inventory.Inventory) 
 	color.Fprintf(w, "  by width:  %s\n", tallyOf(widths, 6, "widths", byWidth))
 	color.Fprintf(w, "  by name:   %s\n", tallyOf(names, 6, "names", nil))
 	color.Fprintf(w, "  made by:   %s\n", tallyOf(makers, 0, "", nil))
-	color.Fprintf(w, "  that cannot be read: %s; holding a single picture: %s; videos with more than one: %s; %s\n", amount(unreadable, bad), amount(single, todo), amount(several, todo), paint(quiet, "ebb verify lists those that are wrong"))
-	if unopened > 0 {
-		color.Fprintf(w, "  that cannot be opened from here, as a Mac cannot open a name on a share whose accents are kept as separate characters: %s; %s\n", amount(unopened, todo), paint(quiet, "run ebb where the files are to read them"))
+	said := []string{fmt.Sprintf("%s broken, %s short, %s long", amount(wrong[verify.Broken], bad), amount(wrong[verify.Short], bad), amount(wrong[verify.Long], bad))}
+	for _, fix := range []string{"copy --upgrade", "build --upgrade"} {
+		if found.fixes[fix] > 0 {
+			said = append(said, fix+" replaces "+amount(found.fixes[fix], good))
+		}
 	}
+	color.Fprintf(w, "  wrong:     %s\n", strings.Join(said, "; "))
+	color.Fprintf(w, "             %s hold a single picture, %s of them short for their video\n", amount(single, ""), amount(singleShort, bad))
+	if unknown > 0 {
+		color.Fprintf(w, "             %s\n", paint(quiet, "Emby has no length for the videos of "+plural(unknown, "BIF", "BIFs")+", so those were only checked for whether they can be read"))
+	}
+	if n := wrong[verify.Unopened]; n > 0 {
+		color.Fprintf(w, "  unopened:  %s, as a Mac cannot open a name on a share whose accents are kept as separate characters; %s\n", amount(n, todo), paint(quiet, "run ebb where the files are to read them"))
+	}
+	color.Fprintf(w, "  several:   %s with more than one\n", counted(several, "video", "videos", todo))
 
 	var strayBytes int64
 	for _, st := range inv.Strays {
 		strayBytes += st.Bytes
 	}
-	color.Fprintf(w, "  strays, beside no video of their name or half written: %s, %s; %s\n", amount(len(inv.Strays), todo), size(strayBytes), paint(quiet, "ebb strays lists them"))
+	color.Fprintf(w, "  strays:    %s, %s, beside no video of their name or half written; %s\n", amount(len(inv.Strays), todo), size(strayBytes), paint(quiet, "ebb clean removes them"))
 
 	if s.jellyfin == nil {
 		color.Fprintf(w, "\n%s\n", paint(todo, fmt.Sprintf("Jellyfin is left out: --jf-db-path (%s) is not set.", envNames["jf-db-path"])))

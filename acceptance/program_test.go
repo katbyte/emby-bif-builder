@@ -144,7 +144,7 @@ func TestCopyAndUpgrade(t *testing.T) {
 		t.Errorf("a run after did more, ending %d:\n%s%s", r.code, r.out, r.errs)
 	}
 
-	r = run(t, dir, nil, "stats")
+	r = run(t, dir, nil, "scan")
 	if r.code != 0 || !strings.Contains(r.out, "made by:   ebb, from Jellyfin: 2") {
 		t.Errorf("stats ended %d:\n%s%s", r.code, r.out, r.errs)
 	}

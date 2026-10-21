@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -82,12 +81,12 @@ func (s *sources) close() {
 }
 
 // take reads what every video has, saying as each step starts and ends, and every few seconds while it reads the folders, unless told to be quiet.
-func (f *FlagData) take(ctx context.Context, s *sources, progress io.Writer) (*inventory.Inventory, error) {
+func (f *FlagData) take(ctx context.Context, s *sources, out io.Writer) (*inventory.Inventory, error) {
 	var (
 		step          inventory.Step
 		started, last time.Time
 	)
-	say := func(parts ...string) { color.Fprintln(progress, strings.Join(parts, "")) }
+	say := func(parts ...string) { color.Fprintln(out, strings.Join(parts, "")) }
 	report := func(e inventory.Event) {
 		if cout.Level < cout.VerbosityNormal {
 			return
@@ -112,7 +111,8 @@ func (f *FlagData) take(ctx context.Context, s *sources, progress io.Writer) (*i
 			say(paint(quiet, "reading the "), paint(mark, number(e.Total)), paint(quiet, " folders the videos are in"))
 		case time.Since(last) >= 5*time.Second:
 			last = time.Now()
-			say(paint(quiet, "read "), paint(mark, number(e.Done)), paint(quiet, " of "), paint(mark, number(e.Total)), paint(quiet, fmt.Sprintf(" folders, %d%%", e.Done*100/e.Total)))
+			far := progress(e.Done, e.Total)
+			say(paint(quiet, "read "), paint(far, number(e.Done)), paint(quiet, " of "), paint(mark, number(e.Total)), paint(quiet, " folders, "), paint(far, fmt.Sprintf("%d%%", e.Done*100/e.Total)))
 		}
 	}
 
@@ -147,9 +147,9 @@ type job struct {
 	from  func(plan.Step) string
 }
 
-// carryOut does each step that is not a leave, workers at a time, and at most limit of them when limit is above 0. Each is said as it starts, with
-// how far through the run it is, what its BIF is made from and where it goes, then what was made, how long it took and how long the rest may take.
-// A step that fails is said and counted, and the rest go on. A dry run says what would be done and does nothing.
+// carryOut does each step that is not a leave, workers at a time, and at most limit of them when limit is above 0. Each is said briefly as it
+// starts, then again once done: which of how many is done, what was made, how long it took, how long the rest may take, its folder and what it was
+// made from. A step that fails is said and counted, and the rest go on. A dry run says what would be done and does nothing.
 func carryOut(ctx context.Context, steps []plan.Step, workers, limit int, dry bool, j job, rec *place.Record) *tally {
 	t := &tally{done: map[plan.Action]int{}, left: map[plan.Reason]int{}}
 
@@ -157,7 +157,7 @@ func carryOut(ctx context.Context, steps []plan.Step, workers, limit int, dry bo
 	for _, s := range steps {
 		if s.Action == plan.Leave {
 			t.left[s.Reason]++
-			cout.Verbosef("%s %s: %s\n", paint(quiet, "left     "), s.Video.Local, paint(quiet, s.Why))
+			cout.Verbosef("%s %s: %s\n", paint(quiet, "left     "), named(s.Video.Local), paint(quiet, s.Why))
 
 			continue
 		}
@@ -167,33 +167,41 @@ func carryOut(ctx context.Context, steps []plan.Step, workers, limit int, dry bo
 		doing = append(doing, s)
 	}
 
-	// the first line of each says which of how many it is, and the lines under it line up after that
+	// a line that says something done starts with how many of how many are done, and the lines under it line up after that
 	of := number(len(doing))
-	at := func(n int) string { return paint(mark, fmt.Sprintf("[%*s/%s]", len(of), number(n), of)) }
+	at := func(n int) string {
+		return paint(progress(n, len(doing)), fmt.Sprintf("[%*s/%s]", len(of), number(n), of))
+	}
 	under := strings.Repeat(" ", len(of)*2+3)
-	starting := func(n int, s plan.Step, verb string) string {
-		return fmt.Sprintf("%s %s: %s\n%s %s %s\n%s %s %s\n", at(n), paint(todo, verb), s.Why, under, paint(quiet, "from     "), j.from(s), under, paint(quiet, "to       "), s.Target)
+	width := 9
+	if dry {
+		width = 13
+	}
+	verb := func(colour, word string) string { return paint(colour, fmt.Sprintf("%-*s", width, word)) }
+	detail := func(label, text string) string {
+		return fmt.Sprintf("%s %s %s\n", under, paint(quiet, fmt.Sprintf("%-*s", width, label)), text)
+	}
+	where := func(s plan.Step, target string) string {
+		return detail("in", paint(quiet, filepath.Dir(target))) + detail("from", j.from(s))
 	}
 
 	if dry {
 		for i, s := range doing {
 			t.done[s.Action]++
-			cout.Printf("%s", starting(i+1, s, "would "+s.Action.String()))
+			cout.Printf("%s %s %s: %s\n%s", at(i+1), verb(todo, "would "+s.Action.String()), paint("bold", filepath.Base(s.Target)), paint(quiet, s.Why), where(s, s.Target))
 		}
 
 		return t
 	}
 
 	var (
-		started atomic.Int64
-		ended   int
-		begun   = time.Now()
+		ended int
+		begun = time.Now()
 	)
 	_ = parallel.Each(ctx, len(doing), workers, func(ctx context.Context, i int) error {
 		s := doing[i]
-		n := int(started.Add(1))
 		t.mu.Lock()
-		cout.Printf("%s", starting(n, s, underway(s.Action)))
+		cout.Printf("%s %s %s: %s\n", under, verb(todo, underway(s.Action)), paint("bold", filepath.Base(s.Target)), paint(quiet, s.Why))
 		t.mu.Unlock()
 		start := time.Now()
 
@@ -202,7 +210,13 @@ func carryOut(ctx context.Context, steps []plan.Step, workers, limit int, dry bo
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			t.fail(at(n), s, err)
+
+			t.mu.Lock()
+			defer t.mu.Unlock()
+
+			ended++
+			t.failed++
+			cout.Errorf("%s %s %s: %s\n%s", at(ended), verb(bad, "failed"), paint("bold", filepath.Base(s.Video.Local)), paint(bad, err.Error()), where(s, s.Target))
 
 			return nil
 		}
@@ -214,21 +228,33 @@ func carryOut(ctx context.Context, steps []plan.Step, workers, limit int, dry bo
 		changes, err := place.Put(target, data, s.Action != plan.Make, replace, rec, s.Why)
 
 		t.mu.Lock()
+		defer t.mu.Unlock()
+
 		ended++
-		left := time.Duration(float64(time.Since(begun)) / float64(ended) * float64(len(doing)-ended))
-		for _, c := range changes {
-			switch c.What {
-			case "removed":
-				t.removed++
-				cout.Quietf("%s %s %s\n", at(n), paint(todo, "removed  "), c.Path)
-			default:
-				t.done[s.Action]++
-				cout.Quietf("%s %s %s: %s, in %s%s\n", at(n), paint(good, fmt.Sprintf("%-9s", past(s.Action))), c.Path, holds(data), verify.Length(time.Since(start)), paint(quiet, remaining(ended, len(doing), left)))
-			}
+		if len(changes) == 0 {
+			t.failed++
+			cout.Errorf("%s %s %s: %s\n%s", at(ended), verb(bad, "failed"), paint("bold", filepath.Base(target)), paint(bad, err.Error()), where(s, target))
+
+			return nil
 		}
-		t.mu.Unlock()
+
+		left := time.Duration(float64(time.Since(begun)) / float64(ended) * float64(len(doing)-ended))
+		said := ""
+		for _, c := range changes {
+			if c.What == "removed" {
+				t.removed++
+				said += detail("", verb(todo, "removed")+" "+filepath.Base(c.Path))
+
+				continue
+			}
+			t.done[s.Action]++
+			said = fmt.Sprintf("%s %s %s: %s, in %s%s\n", at(ended), verb(good, past(s.Action)), paint("bold", filepath.Base(c.Path)), holds(data), verify.Length(time.Since(start)), paint(quiet, remaining(ended, len(doing), left))) + where(s, c.Path) + said
+		}
+		cout.Quietf("%s", said)
+		// the BIF went in, and what then failed was removing one it replaces
 		if err != nil {
-			t.fail(at(n), s, err)
+			t.failed++
+			cout.Errorf("%s %s %s: %s\n", under, verb(bad, "failed"), paint("bold", filepath.Base(target)), paint(bad, err.Error()))
 		}
 
 		return nil
@@ -254,15 +280,6 @@ func remaining(done, of int, left time.Duration) string {
 	}
 
 	return "; about " + verify.Length(left) + " left"
-}
-
-// fail says a step failed, and counts it.
-func (t *tally) fail(at string, s plan.Step, err error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	t.failed++
-	cout.Errorf("%s %s %s: %s\n", at, paint(bad, "failed   "), s.Video.Local, paint(bad, err.Error()))
 }
 
 // underway is the action as it is under way, as the line that starts it says.

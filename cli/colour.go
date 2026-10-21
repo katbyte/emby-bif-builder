@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"fmt"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -22,6 +24,30 @@ const (
 	mark = "cyan"
 )
 
+// progress is the colour of how far through a run done of so many is: red as it starts, then orange and yellow, to green at the end. A terminal of
+// fewer colours gets the nearest it has, and one of the plainest red, then yellow, then green.
+func progress(done, of int) string {
+	pct := 100
+	if of > 0 {
+		pct = min(done*100/of, 100)
+	}
+
+	// the hue runs from red at 0 degrees to green at 120
+	rgb := color.HslIntToRgb(pct*120/100, 85, 55)
+	switch {
+	case color.SupportTrueColor():
+		return fmt.Sprintf("fg=%02x%02x%02x", rgb[0], rgb[1], rgb[2])
+	case color.Support256Color():
+		return fmt.Sprintf("fg=%d", color.RgbTo256(rgb[0], rgb[1], rgb[2]))
+	case pct < 50:
+		return bad
+	case pct < 100:
+		return todo
+	default:
+		return good
+	}
+}
+
 // paint is s in the colour, or s as it is for no colour.
 func paint(colour, s string) string {
 	if colour == "" || s == "" {
@@ -29,6 +55,13 @@ func paint(colour, s string) string {
 	}
 
 	return "<" + colour + ">" + s + "</>"
+}
+
+// named is a path with its folder quiet and its name in bold, so the name stands out of a long line.
+func named(path string) string {
+	dir, name := filepath.Split(path)
+
+	return paint(quiet, dir) + paint("bold", name)
 }
 
 // amount is n as a person writes it, in the colour when there are any and quiet when there are none, so the counts that matter stand out.
