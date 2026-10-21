@@ -1,0 +1,41 @@
+version: 2
+
+project_name: emby-bif-builder
+
+builds:
+  - binary: ebb
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+      - -mod=vendor
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    # Linux for the machine the media servers run on, and macOS for one that sees the media over a share
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - '7'
+    ignore:
+      - goos: darwin
+        goarch: arm
+    ldflags:
+      - -s -w
+      - -X github.com/katbyte/go-kt/version.Version={{ .Tag }}
+      - -X github.com/katbyte/go-kt/version.GitCommit={{ .ShortCommit }}
+
+archives:
+  - formats: [tar.gz]
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  filters:
+    exclude:
+      - '^Bump '
+      - 'merge main'

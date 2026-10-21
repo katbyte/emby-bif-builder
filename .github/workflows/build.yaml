@@ -1,0 +1,33 @@
+---
+name: build
+on:
+  push:
+    branches: [ 'main' ]
+  pull_request:
+    types: ['opened', 'synchronize']
+    paths:
+      - '.github/**'
+      - '**.go'
+      - 'vendor/**'
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ./.go-version
+      - run: make build
+      # the version the program reports is the one the build was given: a
+      # build that reports dev has lost its -X flags
+      - name: smoke test the program
+        run: |
+          go build -ldflags "-X github.com/katbyte/go-kt/version.Version=ci" -o ebb .
+          ./ebb version | grep -F 'ebb ci'

@@ -1,0 +1,41 @@
+---
+name: acceptance
+on:
+  push:
+    branches: [ 'main' ]
+  pull_request:
+    types: ['opened', 'synchronize']
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'vendor/**'
+      - 'makefile'
+      - 'acceptance/**'
+      - '.github/workflows/pr-acceptance.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    name: acceptance (the program, as a person runs it)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ./.go-version
+
+      # the tests that build BIFs from a video run ffmpeg, which a runner does not have
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg
+      # make builds the program and runs it, so CI runs exactly what a developer runs: against
+      # a made-up Emby and Jellyfin the tests lay out. A runner has neither, and the suite needs
+      # neither.
+      - name: Run the live suite
+        run: make testacc

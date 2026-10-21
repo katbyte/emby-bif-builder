@@ -1,0 +1,11 @@
+.claude/
+.DS_Store
+.idea/
+dist/
+ebb
+.tools/bin/
+.tools/venv/
+.tools/npm/
+__pycache__/
+.emby-bif-builder
+.coverage/
