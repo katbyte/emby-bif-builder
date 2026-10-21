@@ -24,16 +24,25 @@ jobs:
         with:
           persist-credentials: false
       - name: Download the latest release
+        id: download
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # before the first release there is nothing anyone runs, so there is nothing to scan
+          if [ "$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq length)" = "0" ]; then
+            echo "::notice::There is no release yet, so no release binary to scan"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           gh release download --pattern '*linux_amd64.tar.gz' --dir release
           tar -xzf release/*.tar.gz -C release
           rm release/*.tar.gz
+          echo "found=true" >> "$GITHUB_OUTPUT"
       # rootfs, not fs: fs mode does not read go binaries. unfixed findings are skipped because nothing can
       # clear them; anything else triaged out goes in .github/trivyignore with a reason
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        if: steps.download.outputs.found == 'true'
         with:
           scan-type: rootfs
           scan-ref: release
