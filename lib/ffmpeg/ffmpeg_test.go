@@ -15,10 +15,14 @@ import (
 )
 
 // brightness is how much brighter the made-up video gets each second, so a picture's brightness says when in the video it was taken.
-const brightness = 3.5
+const brightness = 3
+
+// perSecond is how much brighter a picture is for each second in. The video is kept as nearly every video is, black at 16 and white at 235, and a
+// picture has black at 0 and white at 255, so a picture that is not stretched to that reads as taken seconds late or early.
+const perSecond = brightness * 255.0 / 219
 
 // clip makes a video of this many seconds that gets brighter by the second, at this size, with pixels of this shape, and a key frame every two
-// seconds. A test without ffmpeg to make one is skipped.
+// seconds. Its shades are written as they are kept, so no ffmpeg changes them on the way in. A test without ffmpeg to make one is skipped.
 func clip(t *testing.T, seconds int, size, sar string) string {
 	t.Helper()
 
@@ -27,8 +31,8 @@ func clip(t *testing.T, seconds int, size, sar string) string {
 	}
 
 	path := filepath.Join(t.TempDir(), "clip.mp4")
-	src := fmt.Sprintf("color=c=black:size=%s:rate=25:duration=%d,format=gray,geq=lum='T*%g':cb=128:cr=128,setsar=%s", size, seconds, brightness, sar)
-	out, err := exec.CommandContext(t.Context(), "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", src, "-c:v", "libx264", "-g", "50", "-pix_fmt", "yuv420p", "-color_range", "pc", path).CombinedOutput() //nolint:gosec // the test's own clip, made in its own folder
+	src := fmt.Sprintf("color=c=black:size=%s:rate=25:duration=%d,format=yuv420p,geq=lum='16+T*%d':cb=128:cr=128,setsar=%s", size, seconds, brightness, sar)
+	out, err := exec.CommandContext(t.Context(), "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", src, "-c:v", "libx264", "-g", "50", "-pix_fmt", "yuv420p", path).CombinedOutput() //nolint:gosec // the test's own clip, made in its own folder
 	if err != nil {
 		t.Fatalf("making the clip: %v: %s", err, out)
 	}
@@ -51,7 +55,7 @@ func when(t *testing.T, pic []byte) float64 {
 	}
 	r, g, b, _ := img.At(img.Bounds().Dx()/2, img.Bounds().Dy()/2).RGBA()
 
-	return float64((r+g+b)/3>>8) / brightness
+	return float64((r+g+b)/3>>8) / perSecond
 }
 
 // Picture k is taken k*10 seconds in, as Emby and Jellyfin count them, and a 65-second video has seven: 0 to 60. Taking key frames alone, which come
